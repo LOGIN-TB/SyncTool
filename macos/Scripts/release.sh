@@ -3,8 +3,22 @@
 # stapeln, verpacken, Pruefsumme.
 #
 # Aufruf:
-#   bash Scripts/release.sh 1.4.0          echter Release, braucht Zertifikat
-#   bash Scripts/release.sh 1.4.0 --dev    Trockenlauf ohne Zertifikat
+#   bash Scripts/release.sh 1.4.0              echter Release, braucht Zertifikat
+#   bash Scripts/release.sh 1.4.0 --dev        Trockenlauf ohne Zertifikat
+#   bash Scripts/release.sh 1.4.0 --resume     ohne neu zu bauen weitermachen
+#   bash Scripts/release.sh 1.4.0 --resume ID  auf eine laufende Einreichung warten
+#
+# --resume ist fuer den einen Schritt, der von aussen haengen kann: die
+# Notarisierung. Wird sie abgebrochen oder dauert sie Stunden, waere ein neuer
+# Lauf teuer und falsch. Teuer, weil er neu baut; falsch, weil die Baunummer
+# dabei hochzaehlt und der Inhalt sich aendert. Das Ticket haengt aber am
+# Inhalt: stapler holt es ueber den Hash der Signatur, nicht ueber die
+# Einreichungskennung. Ein neu gebautes Bundle passt also nicht mehr zu einer
+# Einreichung, die gerade laeuft.
+#
+# Mit --resume bleibt das vorhandene Bundle stehen. Ohne Kennung reicht das
+# Skript es erneut ein, mit Kennung wartet es auf eine laufende Einreichung.
+# `xcrun notarytool history --keychain-profile <profil>` nennt die Kennungen.
 #
 # Erwartet in der Umgebung oder in Scripts/release.conf:
 #   SIGN_IDENTITY     z.B. "Developer ID Application: Name (TEAMID)"
@@ -24,9 +38,26 @@ die() { echo "FEHLER: $*" >&2; exit 1; }
 note() { echo; echo "==> $*"; }
 
 VERSION="${1:-}"
+shift || true
 MODE="release"
-[ "${2:-}" = "--dev" ] && MODE="dev"
-[ -n "$VERSION" ] || die "Aufruf: release.sh <Fassung> [--dev]"
+RESUME=0
+RESUME_ID=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dev) MODE="dev" ;;
+        --resume)
+            RESUME=1
+            # Eine Kennung darf folgen, muss aber nicht.
+            case "${2:-}" in
+                "" | --*) ;;
+                *) RESUME_ID="$2"; shift ;;
+            esac
+            ;;
+        *) die "Unbekanntes Argument: $1" ;;
+    esac
+    shift
+done
+[ -n "$VERSION" ] || die "Aufruf: release.sh <Fassung> [--dev] [--resume [ID]]"
 echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
     || die "Fassung muss die Form 1.4.0 haben, bekommen: $VERSION"
 
@@ -76,21 +107,25 @@ else
     note "Tor 3: uebersprungen, Trockenlauf"
 fi
 
-# --- Tests -------------------------------------------------------------------
+# --- Tests und Bau, oder das vorhandene Bundle weiterbenutzen ----------------
 
-note "Tests"
-make -C "$ROOT" --no-print-directory test
-
-# --- Fassung setzen und bauen ------------------------------------------------
-
-note "Fassung $VERSION"
-printf '%s\n%s\n' "$VERSION" "$(sed -n '2p' "$ROOT/VERSION")" > "$ROOT/VERSION"
-
-note "Bauen"
-if [ "$MODE" = "release" ]; then
-    SIGN_IDENTITY="$SIGN_IDENTITY" bash "$ROOT/Scripts/bundle.sh"
+if [ "$RESUME" = "1" ]; then
+    note "Fortsetzen: kein neuer Bau"
+    [ -d "$APP" ] || die "Kein Bundle unter $APP. Ohne --resume laufen lassen."
+    echo "    Bundle von $(stat -f '%Sm' "$APP")"
 else
-    bash "$ROOT/Scripts/bundle.sh"
+    note "Tests"
+    make -C "$ROOT" --no-print-directory test
+
+    note "Fassung $VERSION"
+    printf '%s\n%s\n' "$VERSION" "$(sed -n '2p' "$ROOT/VERSION")" > "$ROOT/VERSION"
+
+    note "Bauen"
+    if [ "$MODE" = "release" ]; then
+        SIGN_IDENTITY="$SIGN_IDENTITY" bash "$ROOT/Scripts/bundle.sh"
+    else
+        bash "$ROOT/Scripts/bundle.sh"
+    fi
 fi
 
 BUILD="$(sed -n '2p' "$ROOT/VERSION")"
@@ -121,16 +156,25 @@ fi
 # --- Notarisieren und stapeln -----------------------------------------------
 
 mkdir -p "$DIST"
-rm -f "$DIST"/*.dmg "$DIST"/*.zip "$DIST/SHA256SUMS" 2> /dev/null || true
+rm -f "$DIST"/*.dmg "$DIST/SHA256SUMS" 2> /dev/null || true
 
 if [ "$MODE" = "release" ]; then
-    note "Notarisieren"
     ZIP="$DIST/SyncTool-$VERSION-einreichung.zip"
-    # ditto und nicht zip: nur ditto erhaelt die Bundle-Struktur samt
-    # Symlinks und erweiterten Attributen so, dass die Signatur gueltig bleibt.
-    ditto -c -k --keepParent "$APP" "$ZIP"
-    xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait \
-        || die "Notarisierung fehlgeschlagen. 'xcrun notarytool log <id>' nennt den Grund."
+    if [ -n "$RESUME_ID" ]; then
+        note "Auf Einreichung $RESUME_ID warten"
+        # Kein --timeout: die Notarisierung dauert unvorhersehbar lange, und ein
+        # Abbruch hier waere genau das Problem, das --resume loesen soll.
+        xcrun notarytool wait "$RESUME_ID" --keychain-profile "$NOTARY_PROFILE" \
+            || die "Notarisierung fehlgeschlagen. 'xcrun notarytool log $RESUME_ID' nennt den Grund."
+    else
+        note "Notarisieren"
+        # ditto und nicht zip: nur ditto erhaelt die Bundle-Struktur samt
+        # Symlinks und erweiterten Attributen so, dass die Signatur gueltig bleibt.
+        rm -f "$ZIP"
+        ditto -c -k --keepParent "$APP" "$ZIP"
+        xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait \
+            || die "Notarisierung fehlgeschlagen. 'xcrun notarytool log <id>' nennt den Grund."
+    fi
     rm -f "$ZIP"
 
     # Gestapelt wird die App und nicht das Archiv: an ein zip laesst sich kein

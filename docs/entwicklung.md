@@ -134,9 +134,28 @@ xcrun notarytool wait <id> --keychain-profile synctool
 xcrun notarytool log <id> --keychain-profile synctool
 ```
 
-Ein erneuter Skriptlauf reicht denselben Stand noch einmal ein. Das kostet Zeit,
-schadet aber nicht: jede Einreichung bekommt eine eigene Kennung, und gestapelt
-wird am Ende das Ticket zum Inhalt, nicht zur Einreichung.
+### Fortsetzen statt neu bauen
+
+Ein voller neuer Lauf wäre hier falsch, nicht nur langsam: er baut neu, dabei
+zählt die Baunummer hoch, und damit ändert sich der Inhalt. Das Ticket hängt
+aber am Inhalt. `stapler` holt es über den Hash der Signatur, nicht über die
+Einreichungskennung. Ein neu gebautes Bundle passt also zu keiner Einreichung
+mehr, die gerade läuft.
+
+Deshalb:
+
+```bash
+make release VERSION=1.4.0                     # voller Lauf
+bash macos/Scripts/release.sh 1.4.0 --resume   # ohne neu zu bauen, neu einreichen
+bash macos/Scripts/release.sh 1.4.0 --resume <id>   # auf eine laufende warten
+```
+
+`--resume` lässt Tests und Bau aus und benutzt das Bundle, das schon unter
+`macos/build/` liegt. Danach läuft alles Übrige wie immer: stapeln, DMG,
+signieren, Prüfsumme.
+
+Weil das Ticket am Inhalt hängt, genügt **eine** angenommene Einreichung
+desselben Stands, auch wenn mehrere parallel laufen.
 
 ### Entitlements braucht die App keine
 
