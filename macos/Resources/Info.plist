@@ -27,7 +27,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>© 2026 Holger Erbe, LOGIN SystemHaus. MIT-Lizenz.</string>
+	<string>© 2026 Holger Erbe, LOGIN SystemHaus GmbH. MIT-Lizenz.</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 </dict>
