@@ -2,6 +2,16 @@ import SwiftUI
 import SyncCore
 
 struct StatusView: View {
+
+    /// Wie die andere Seite in dieser Ansicht heisst. "Server" ist bei einer
+    /// externen Platte falsch, und "Vom Server holen" ueber einem Ordner auf der
+    /// eigenen Platte erklaert niemandem, was passiert.
+    private var remoteLabel: String {
+        state.selectedProfile?.transport.remoteLabel ?? "Ziel"
+    }
+    private var remoteLabelInPlace: String {
+        state.selectedProfile?.transport.remoteLabelInPlace ?? "im Ziel"
+    }
     @ObservedObject var state: AppState
     @Environment(\.openWindow) private var openWindow
 
@@ -188,16 +198,16 @@ struct StatusView: View {
             if !status.isInSync {
                 VStack(alignment: .leading, spacing: 8) {
                     if !status.conflicts.isEmpty {
-                        ConflictSection(conflicts: status.conflicts)
+                        ConflictSection(remoteLabel: remoteLabel, conflicts: status.conflicts)
                     }
                     DriftSection(
-                        title: "Vom Server holen",
+                        title: "Vom \(remoteLabel) holen",
                         systemImage: "arrow.down.circle",
                         items: status.incoming,
                         bytes: status.incomingBytes
                     )
                     DriftSection(
-                        title: "Zum Server schicken",
+                        title: "Zum \(remoteLabel) schicken",
                         systemImage: "arrow.up.circle",
                         items: status.outgoing,
                         bytes: status.outgoingBytes
@@ -205,7 +215,7 @@ struct StatusView: View {
                 }
             }
 
-            InventoryBalance(report: status.report)
+            InventoryBalance(remoteLabel: remoteLabel, report: status.report)
 
             deletionRow(status)
             actions(status)
@@ -339,7 +349,7 @@ struct StatusView: View {
                 if push > 0 {
                     Text(
                         "\(Format.count(push, singular: "Datei hast", plural: "Dateien hast")) "
-                            + "du lokal gelöscht. Hochladen entfernt sie auch auf dem Server."
+                            + "du lokal gelöscht. Hochladen entfernt sie auch \(remoteLabelInPlace)."
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -348,7 +358,7 @@ struct StatusView: View {
                 if pull > 0 {
                     Text(
                         "\(Format.count(pull, singular: "Datei wurde", plural: "Dateien wurden")) "
-                            + "auf dem Server gelöscht. Herunterladen entfernt sie auch hier."
+                            + "\(remoteLabelInPlace) gelöscht. Herunterladen entfernt sie auch hier."
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -423,7 +433,7 @@ struct StatusView: View {
     /// uebernimmt, und nimmt den Alert mit. Die Rueckfrage war so nicht zu
     /// bestaetigen.
     private func deletionConfirmation(_ pending: PendingDeletion) -> some View {
-        let side = pending.direction == .pull ? "hier" : "auf dem Server"
+        let side = pending.direction == .pull ? "hier" : remoteLabelInPlace
         return VStack(alignment: .leading, spacing: 10) {
             Label(
                 "\(Format.count(pending.items.count, singular: "Datei", plural: "Dateien")) löschen?",
@@ -532,6 +542,7 @@ struct StatusView: View {
 // MARK: - Bausteine
 
 private struct InventoryBalance: View {
+    let remoteLabel: String
     let report: InventoryReport
     @State private var expanded = false
 
@@ -543,7 +554,7 @@ private struct InventoryBalance: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
-                side("Server", report.remoteFiles, report.remoteDirectories, report.remoteBytes)
+                side(remoteLabel, report.remoteFiles, report.remoteDirectories, report.remoteBytes)
                 Image(systemName: differs ? "notequal" : "equal")
                     .font(.caption)
                     .foregroundStyle(differs ? Color.orange : Color.secondary.opacity(0.6))
@@ -678,6 +689,7 @@ private struct DriftSection: View {
 }
 
 private struct ConflictSection: View {
+    let remoteLabel: String
     let conflicts: [ConflictItem]
     @State private var expanded = true
 
@@ -700,7 +712,7 @@ private struct ConflictSection: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Text(
-                            "\(conflict.reason.label) · Server \(Format.timestamp(conflict.remoteModified)) "
+                            "\(conflict.reason.label) · \(remoteLabel) \(Format.timestamp(conflict.remoteModified)) "
                                 + "(\(Format.bytes(conflict.remoteSize))) · lokal "
                                 + "\(Format.timestamp(conflict.localModified)) (\(Format.bytes(conflict.localSize)))"
                         )

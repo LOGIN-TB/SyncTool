@@ -67,6 +67,30 @@ public enum Transport: Sendable, Hashable {
         }
     }
 
+    /// Wie die andere Seite in der Oberflaeche heisst.
+    ///
+    /// "Server" ist bei einer externen Platte falsch, und ein Bildschirmfoto mit
+    /// "Vom Server holen" ueber einem Ordner auf der eigenen Platte macht
+    /// niemandem klar, was passiert. Also fragt die Oberflaeche hier nach.
+    public var remoteLabel: String {
+        switch self {
+        case .sshRsync: return "Server"
+        case .localFolder: return "Ziel"
+        case .mountedVolume: return "Freigabe"
+        case .unknown: return "Ziel"
+        }
+    }
+
+    /// Dieselbe Bezeichnung mit Praeposition: "auf dem Server", "im Ziel".
+    public var remoteLabelInPlace: String {
+        switch self {
+        case .sshRsync: return "auf dem Server"
+        case .localFolder: return "im Ziel"
+        case .mountedVolume: return "in der Freigabe"
+        case .unknown: return "im Ziel"
+        }
+    }
+
     /// Ein Profil, dessen Transport diese Fassung nicht kennt, wird angezeigt,
     /// aber niemals ausgefuehrt.
     public var isRunnable: Bool {

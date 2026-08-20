@@ -22,5 +22,8 @@ AuthKey_*.p8
 notarytool-*.json
 SHA256SUMS
 
-# Werkstatt der Bildschirmfotos
-macos/Scripts/.shots/
+# Werkstatt der Bildschirmfotos. Ohne Pfad davor, damit der Eintrag greift,
+# egal wo das Skript sie anlegt: ein falsch verankerter Eintrag hat sie beim
+# ersten Mal durchgelassen, und nur der Waechter hat es gemerkt.
+.shots/
+/SyncTool-Beispiel/

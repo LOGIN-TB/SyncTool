@@ -39,9 +39,12 @@ struct SyncToolApp: App {
         // Breite und undurchsichtigem Hintergrund ohnehin fensterfertig.
         Window("SyncTool", id: "status") {
             StatusView(state: state)
-                .frame(minHeight: 320)
         }
-        .windowResizability(.contentMinSize)
+        // `.contentSize` und nicht `.contentMinSize`: StatusView hat eine feste
+        // Breite, also soll das Fenster genau so breit sein. Mit einem
+        // Mindestmass bekaeme es die Vorgabegroesse und stuende mit einem
+        // breiten Rand um seinen Inhalt da.
+        .windowResizability(.contentSize)
         .defaultPosition(.center)
     }
 }
@@ -93,6 +96,22 @@ enum StartupWindows {
         // Ohne das bleibt das Fenster hinter allem anderen liegen, weil eine
         // LSUIElement-App beim Start nicht nach vorn kommt.
         if opened { NSApp.activate(ignoringOtherApps: true) }
+
+        // Ein Prueflauf gleich nach dem Start. Nur damit die Statusansicht in
+        // einem Bildschirmfoto etwas zeigt statt "noch nie geprueft".
+        // Gefahrlos: Pruefen liest nur, es uebertraegt nichts und loescht nichts.
+        //
+        // Erst abwarten, bis die rsync-Suche durch ist. Die laeuft beim Start
+        // als eigene Aufgabe, und wer davor prueft, faengt sich die Meldung
+        // "Kein rsync gefunden" ein, die danach stehen bleibt.
+        if flags.contains("--check") {
+            Task {
+                for _ in 0..<50 where state.rsyncInfo == nil {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                await state.check()
+            }
+        }
     }
 
     /// Liest `--name=wert`. Nur diese Schreibweise, damit ein vergessener Wert
