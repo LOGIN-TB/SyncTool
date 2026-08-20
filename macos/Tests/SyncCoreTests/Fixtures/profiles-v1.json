@@ -1,0 +1,20 @@
+[
+  {
+    "authMode" : "password",
+    "deleteAllowed" : true,
+    "excludes" : [
+      ".DS_Store",
+      "node_modules\/"
+    ],
+    "host" : "u123456-sub1.your-storagebox.de",
+    "id" : "21D48F9B-6E1B-44CA-9545-464463FB1579",
+    "localRoot" : "\/Users\/test\/Develop",
+    "maxDelete" : 1000,
+    "name" : "Storage Box",
+    "port" : 23,
+    "remotePath" : "dev",
+    "rsyncPath" : "",
+    "useChecksum" : true,
+    "user" : "u123456-sub1"
+  }
+]

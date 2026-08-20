@@ -1,0 +1,51 @@
+name: Tests und Bau
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pruefen:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Werkzeuge nennen
+        run: |
+          swift --version
+          xcode-select -p
+
+      # Dauerwaechter: was hier auftaucht, gehoert nicht in ein oeffentliches
+      # Repo. Der Griff stand vor dem ersten Commit einmal von Hand da und
+      # laeuft seitdem bei jeder Aenderung mit, damit er nicht zurueckkommt.
+      - name: Keine privaten Werte im Baum
+        run: |
+          MUSTER=macos/Scripts/private-patterns.txt
+          if grep -rInE -f <(grep -v '^#' "$MUSTER" | grep -v '^$') \
+               --exclude=private-patterns.txt \
+               --exclude-dir=.git --exclude-dir=.build --exclude-dir=build . ; then
+            echo "::error::Private Werte im Baum gefunden"
+            exit 1
+          fi
+          echo "sauber"
+
+      - name: Tests
+        run: make test
+
+      - name: Bauen
+        run: make app
+
+      # Der eine Punkt, der sich von einem Entwicklerrechner unterscheiden kann.
+      # Der Laeufer hat volles Xcode, hier also ein zweiter Beweis, dass der
+      # Universal-Weg ohne xcbuild trotzdem beide Architekturen liefert.
+      - name: Architekturen
+        run: |
+          BIN=macos/build/SyncTool.app/Contents/MacOS/SyncTool
+          lipo -archs "$BIN"
+          lipo -archs "$BIN" | grep -q arm64
+          lipo -archs "$BIN" | grep -q x86_64
+          for arch in arm64 x86_64; do
+            otool -arch $arch -l "$BIN" | awk '/LC_BUILD_VERSION/,/sdk/' | grep -m1 minos
+          done

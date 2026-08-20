@@ -1,0 +1,24 @@
+name: Wunsch
+description: Etwas fehlt oder könnte besser sein.
+labels: ["wunsch"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ein Blick in CONTRIBUTING.md lohnt vorher: dort steht, was bewusst nicht
+        kommt, etwa automatischer Abgleich, Zeitplan und Ordnerüberwachung.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Welches Problem soll das lösen
+      description: Die Lage, nicht die Lösung. Oft gibt es einen kürzeren Weg dorthin.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idee
+    attributes:
+      label: Wie es aussehen könnte
+    validations:
+      required: false

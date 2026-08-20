@@ -1,0 +1,63 @@
+name: Fehler melden
+description: Etwas funktioniert nicht wie beschrieben.
+labels: ["fehler"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke fürs Melden. Deutsch oder Englisch, beides ist in Ordnung.
+
+  - type: input
+    id: fassung
+    attributes:
+      label: Fassung und Baunummer
+      description: Beides steht oben im Statusfenster, die Baunummer erscheint, wenn der Mauszeiger darüber steht.
+      placeholder: "1.4.0, Build 2026.08.20-3"
+    validations:
+      required: true
+
+  - type: input
+    id: macos
+    attributes:
+      label: macOS-Fassung und Rechner
+      placeholder: "macOS 15.3, MacBook Pro M1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ziel
+    attributes:
+      label: Welche Art von Ziel
+      options:
+        - Hetzner Storage Box
+        - Eigener Server oder NAS über SSH
+        - Externe Platte oder lokaler Ordner
+        - Ordner eines Cloud-Clients (Nextcloud, Drive, OneDrive, Dropbox)
+        - Etwas anderes
+    validations:
+      required: true
+
+  - type: input
+    id: rsync
+    attributes:
+      label: Welche rsync-Fassung
+      description: Steht unter „Programm, Allgemein".
+      placeholder: "rsync 3.5.0 unter /opt/homebrew/bin"
+
+  - type: textarea
+    id: erwartet
+    attributes:
+      label: Was erwartet, was passiert
+      description: Am hilfreichsten ist der Weg dorthin, Schritt für Schritt.
+    validations:
+      required: true
+
+  - type: textarea
+    id: protokoll
+    attributes:
+      label: Auszug aus dem Protokoll
+      description: |
+        **Bitte vorher Servernamen, Benutzernamen und Pfade entfernen.** Das
+        Protokoll enthält die vollständige rsync-Kommandozeile und damit dein
+        Ziel. Ein Passwort steht nie darin, dafür sorgt die App.
+      render: text

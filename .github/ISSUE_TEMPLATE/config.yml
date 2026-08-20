@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Sicherheitslücke melden
+    url: https://github.com/LOGIN-TB/SyncTool/security/advisories/new
+    about: Bitte nicht als öffentliches Issue. Der private Weg steht in SECURITY.md.

@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# SwiftPM
+.build/
+.build-arm64/
+.build-x86_64/
+.swiftpm/
+Package.resolved
+
+# Bauergebnisse und Artefakte
+build/
+dist/
+*.dmg
+*.zip
+
+# Nie einchecken: Signier- und Notarisierungsmaterial
+*.p12
+*.cer
+*.certSigningRequest
+AuthKey_*.p8
+notarytool-*.json
+SHA256SUMS
+
+# Werkstatt der Bildschirmfotos
+macos/Scripts/.shots/

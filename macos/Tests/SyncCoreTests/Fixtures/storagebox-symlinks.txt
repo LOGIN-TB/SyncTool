@@ -1,0 +1,4 @@
+.L...p.....|24|2026/08/18-04:00:00|projekt/deploy/backups/daily/dump-latest.sql.gz
+.L...p.....|31|2026/08/18-04:00:00|projekt/deploy/backups/last/dump-latest.sql.gz
+.L...p.....|22|2026/08/18-04:00:00|projekt/deploy/backups/monthly/dump-latest.sql.gz
+.L...p.....|22|2026/08/18-04:00:00|projekt/deploy/backups/weekly/dump-latest.sql.gz

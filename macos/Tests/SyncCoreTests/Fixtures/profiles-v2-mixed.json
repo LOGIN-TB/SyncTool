@@ -1,0 +1,53 @@
+[
+  {
+    "authMode" : "password",
+    "deleteAllowed" : true,
+    "excludes" : [ ".DS_Store" ],
+    "host" : "u123456-sub1.your-storagebox.de",
+    "id" : "21D48F9B-6E1B-44CA-9545-464463FB1579",
+    "localRoot" : "\/Users\/test\/Develop",
+    "maxDelete" : 1000,
+    "name" : "Storage Box",
+    "port" : 23,
+    "remotePath" : "dev",
+    "rsyncPath" : "",
+    "useChecksum" : true,
+    "user" : "u123456-sub1"
+  },
+  {
+    "authMode" : "password",
+    "backupDestination" : "",
+    "deleteAllowed" : false,
+    "excludes" : [ ".DS_Store" ],
+    "host" : "",
+    "id" : "0C51E1F9-2B02-4A2E-9E6B-1B2F5B4D6A11",
+    "localRoot" : "\/Users\/test\/Develop",
+    "maxDelete" : 100,
+    "name" : "OneDrive",
+    "port" : 23,
+    "providerID" : "onedrive-folder",
+    "remotePath" : "\/Users\/test\/Library\/CloudStorage\/OneDrive-Privat\/Develop",
+    "rsyncPath" : "",
+    "share" : "",
+    "transportRaw" : "localFolder",
+    "unmountAfterRun" : true,
+    "useChecksum" : false,
+    "user" : ""
+  },
+  {
+    "authMode" : "password",
+    "deleteAllowed" : false,
+    "excludes" : [],
+    "host" : "s3.eu-central-1.example",
+    "id" : "9A7C4D2E-8F31-4C6B-B0A5-3E7D1C9F2B44",
+    "localRoot" : "\/Users\/test\/Develop",
+    "maxDelete" : 100,
+    "name" : "Objektspeicher",
+    "port" : 443,
+    "remotePath" : "eimer",
+    "rsyncPath" : "",
+    "transportRaw" : "rclone:s3",
+    "useChecksum" : false,
+    "user" : "key"
+  }
+]

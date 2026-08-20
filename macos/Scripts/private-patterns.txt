@@ -1,0 +1,14 @@
+# Werte, die nie in ein oeffentliches Repo gehoeren. Je Zeile ein erweiterter
+# regulaerer Ausdruck, Zeilen mit # sind Kommentar.
+#
+# Eine eigene Datei und nicht ein Muster im Skript: sonst findet der Waechter
+# sich selbst, und wer das mit einer Ausnahme fuer das Skript loest, hat eine
+# Ausnahme, in der sich spaeter ein echter Treffer verstecken kann. Diese Datei
+# ist die einzige Stelle, die vom Griff ausgenommen wird.
+#
+# Fruehere echte Werte aus der Entwicklungszeit vor der Veroeffentlichung:
+u317193
+100cloud
+postgres-latest
+# Der Pfad des Autors. Tests und Beispiele nutzen /Users/test.
+/Users/holger

@@ -1,0 +1,9 @@
+*deleting  |0|2026/08/16-12:46:24|alt/entfernt.txt
+>f+++++++++|1024|2026/08/16-12:46:24|neu.txt
+>f.st......|2048|2026/08/16-13:00:00|projekt/quelle.swift
+>f..t......|512|2026/08/16-13:05:00|projekt/nur-zeit.txt
+cd+++++++++|96|2026/08/16-12:46:24|projekt/
+cL+++++++++|11|2026/08/16-12:46:24|verweis.txt
+.f...p.....|64|2026/08/16-12:46:24|rechte-geaendert.sh
+.f.........|64|2026/08/16-12:46:24|unveraendert.txt
+>f.st......|99|2026/08/16-13:10:00|seltsam|name.txt
