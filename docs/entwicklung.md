@@ -100,11 +100,43 @@ Nötig ist eine bezahlte Apple-Developer-Mitgliedschaft und ein Zertifikat
    ist einem app-spezifischen Passwort vorzuziehen, weil er einzeln widerrufbar
    ist.
 
-Danach:
+Danach in `macos/Scripts/release.conf` die beiden Namen hinterlegen. Die Datei
+steht in `.gitignore`, sie gilt fuer genau diesen Rechner:
+
+```bash
+SIGN_IDENTITY="Developer ID Application: Firma (TEAMID)"
+NOTARY_PROFILE="synctool"
+```
+
+Dann:
 
 ```bash
 make release VERSION=1.4.0
 ```
+
+### Die Notarisierung dauert, und zwar unvorhersehbar
+
+Apple braucht dafuer meist wenige Minuten, gelegentlich aber eine halbe Stunde
+und mehr. Der Aufruf `notarytool submit --wait` wartet ohne Zeitgrenze, das
+Skript laeuft also einfach durch. Wer es in einer Umgebung mit Zeitgrenze
+startet, sollte es abkoppeln:
+
+```bash
+make release VERSION=1.4.0 > release.log 2>&1 &
+```
+
+Wird der Aufruf abgebrochen, laeuft die Einreichung bei Apple **weiter**. Sie
+ist damit nicht verloren:
+
+```bash
+xcrun notarytool history --keychain-profile synctool
+xcrun notarytool wait <id> --keychain-profile synctool
+xcrun notarytool log <id> --keychain-profile synctool
+```
+
+Ein erneuter Skriptlauf reicht denselben Stand noch einmal ein. Das kostet Zeit,
+schadet aber nicht: jede Einreichung bekommt eine eigene Kennung, und gestapelt
+wird am Ende das Ticket zum Inhalt, nicht zur Einreichung.
 
 ### Entitlements braucht die App keine
 
