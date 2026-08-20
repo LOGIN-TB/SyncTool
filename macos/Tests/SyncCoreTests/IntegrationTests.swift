@@ -362,13 +362,12 @@ struct RsyncIntegrationTests {
 
     /// Neun Flag-Zeichen bei openrsync, elf bei rsync 3. Der Bestand muss
     /// trotzdem derselbe sein, sonst haengt das Ergebnis am Binary.
-    @Test("Beide rsync-Varianten liefern denselben Bestand")
+    /// `.enabled(if:)` und nicht `#require`: ein fehlendes rsync 3.x ist kein
+    /// Fehler dieses Projekts, sondern eine Eigenschaft des Rechners. `#require`
+    /// liess den Test scheitern, statt ihn zu ueberspringen.
+    @Test("Beide rsync-Varianten liefern denselben Bestand", .enabled(if: TestRsync.hasThree))
     func bothRsyncVariantsAgree() async throws {
-        let homebrew = "/opt/homebrew/bin/rsync"
-        try #require(
-            FileManager.default.isExecutableFile(atPath: homebrew),
-            "rsync 3.x nicht installiert"
-        )
+        let homebrew = TestRsync.threePath
         let sandbox = try makeSandbox()
         defer {
             try? FileManager.default.removeItem(at: sandbox.source.deletingLastPathComponent())
@@ -722,10 +721,12 @@ struct LocalFolderEngineTests {
     }
 }
 
-@Suite("Backup mit echtem zip")
+/// Die ganze Suite braucht ein rsync 3.x: der Bestandslauf des Backups setzt
+/// `-8` fuer unmaskierte Namen, und openrsync kann das nicht.
+@Suite("Backup mit echtem zip", .enabled(if: TestRsync.hasThree))
 struct BackupIntegrationTests {
-    private let openrsync = "/usr/bin/rsync"
-    private let homebrew = "/opt/homebrew/bin/rsync"
+    private let openrsync = TestRsync.systemRsync
+    private let homebrew = TestRsync.threePath
 
     private struct Sandbox {
         let base: URL

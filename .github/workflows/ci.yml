@@ -12,10 +12,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Der Laeufer bringt nur openrsync mit. Einige Integrationstests brauchen
+      # ein rsync 3.x, und die App bevorzugt es ohnehin. Ohne diesen Schritt
+      # wuerden sie uebersprungen, und die CI bewiese weniger als sie koennte.
+      - name: rsync 3.x installieren
+        run: brew install rsync
+
       - name: Werkzeuge nennen
         run: |
           swift --version
           xcode-select -p
+          /opt/homebrew/bin/rsync --version | head -1
+          /usr/bin/rsync --version | head -1
 
       # Dauerwaechter: was hier auftaucht, gehoert nicht in ein oeffentliches
       # Repo. Der Griff stand vor dem ersten Commit einmal von Hand da und
