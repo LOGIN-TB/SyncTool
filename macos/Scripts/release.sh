@@ -42,9 +42,17 @@ shift || true
 MODE="release"
 RESUME=0
 RESUME_ID=""
+RESUME_DMG_ID=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --dev) MODE="dev" ;;
+        --resume-dmg)
+            RESUME=1
+            case "${2:-}" in
+                "" | --*) die "--resume-dmg braucht die Kennung der DMG-Einreichung" ;;
+                *) RESUME_DMG_ID="$2"; shift ;;
+            esac
+            ;;
         --resume)
             RESUME=1
             # Eine Kennung darf folgen, muss aber nicht.
@@ -179,9 +187,18 @@ if [ "$MODE" = "release" ]; then
 
     # Gestapelt wird die App und nicht das Archiv: an ein zip laesst sich kein
     # Ticket haengen. Die DMG entsteht danach und traegt das Ticket in sich.
-    note "Ticket stapeln"
-    xcrun stapler staple "$APP" || die "Stapeln fehlgeschlagen"
-    xcrun stapler validate -v "$APP" || die "Ticket nicht gueltig"
+    note "Ticket an die App stapeln"
+    gestapelt=0
+    for versuch in $(seq 1 60); do
+        if xcrun stapler staple "$APP" > /dev/null 2>&1; then
+            echo "    gestapelt im $versuch. Versuch"
+            gestapelt=1
+            break
+        fi
+        sleep 20
+    done
+    [ "$gestapelt" = "1" ] || die "Ticket wurde nicht ausgeliefert. Spaeter mit --resume erneut."
+    xcrun stapler validate -v "$APP" > /dev/null || die "Ticket nicht gueltig"
 fi
 
 # --- DMG ---------------------------------------------------------------------
@@ -203,9 +220,47 @@ hdiutil create -volname "SyncTool $VERSION" -srcfolder "$STAGE" \
 rm -rf "$STAGE"
 
 if [ "$MODE" = "release" ]; then
-    note "DMG signieren und pruefen"
+    note "DMG signieren"
     codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DIST/$NAME"
-    xcrun stapler staple "$DIST/$NAME" || die "DMG stapeln fehlgeschlagen"
+
+    # Die DMG braucht ihre eigene Notarisierung. Sie hat einen eigenen Hash, und
+    # ein Ticket haengt am Hash: die Einreichung der App deckt sie nicht mit ab.
+    # Genau daran ist der erste echte Release gescheitert, weil hier direkt
+    # gestapelt wurde.
+    #
+    # Beides zu notarisieren, App und DMG, ist Absicht. Die DMG traegt das
+    # Ticket, damit ein Doppelklick ohne Rueckfrage durchgeht. Die App traegt
+    # ihr eigenes, damit sie auch dann noch geprueft werden kann, wenn jemand
+    # sie aus dem Abbild herauszieht und der Rechner offline ist.
+    if [ -n "$RESUME_DMG_ID" ]; then
+        note "Auf DMG-Einreichung $RESUME_DMG_ID warten"
+        xcrun notarytool wait "$RESUME_DMG_ID" --keychain-profile "$NOTARY_PROFILE" \
+            || die "Notarisierung der DMG fehlgeschlagen."
+    else
+        note "DMG notarisieren"
+        xcrun notarytool submit "$DIST/$NAME" --keychain-profile "$NOTARY_PROFILE" --wait \
+            || die "Notarisierung der DMG fehlgeschlagen. 'xcrun notarytool log <id>' nennt den Grund."
+    fi
+
+    # Nach der Annahme braucht das Ticket noch einen Moment, bis es ausgeliefert
+    # ist. stapler holt es ueber CloudKit, und dort erscheint es mit
+    # Verzoegerung. Ein einzelner Versuch scheitert deshalb mit
+    # "Record not found", obwohl alles stimmt.
+    note "Ticket an die DMG stapeln"
+    gestapelt=0
+    for versuch in $(seq 1 60); do
+        if xcrun stapler staple "$DIST/$NAME" > /dev/null 2>&1; then
+            echo "    gestapelt im $versuch. Versuch"
+            gestapelt=1
+            break
+        fi
+        sleep 20
+    done
+    [ "$gestapelt" = "1" ] || die "Ticket wurde nicht ausgeliefert. Spaeter erneut: xcrun stapler staple '$DIST/$NAME'"
+
+    note "Gatekeeper"
+    xcrun stapler validate -v "$DIST/$NAME" > /dev/null \
+        || die "Ticket der DMG ist nicht gueltig"
     spctl -a -vvv -t open --context context:primary-signature "$DIST/$NAME" \
         || die "Gatekeeper lehnt die DMG ab"
 
