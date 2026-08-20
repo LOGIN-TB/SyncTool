@@ -20,6 +20,9 @@ dist/
 *.certSigningRequest
 AuthKey_*.p8
 notarytool-*.json
+# Oertliche Signier-Einstellungen. Kein Geheimnis darin, aber sie gilt fuer
+# genau diesen Rechner und hat im Repo nichts zu suchen.
+macos/Scripts/release.conf
 SHA256SUMS
 
 # Werkstatt der Bildschirmfotos. Ohne Pfad davor, damit der Eintrag greift,
