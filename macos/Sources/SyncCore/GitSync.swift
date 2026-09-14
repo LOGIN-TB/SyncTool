@@ -68,6 +68,16 @@ public struct GitRepoResult: Sendable, Identifiable {
 
     public var displayName: String { root.isEmpty ? "Stammordner" : String(root.dropLast()) }
 
+    /// Gehoert das ins Statusfenster? Ein Repo auf gleichem Stand gehoert nicht
+    /// dorthin, sonst steht dort eine Liste, in der nichts zu tun ist.
+    public var needsAttention: Bool {
+        if case .upToDate = action { return false }
+        return true
+    }
+
+    /// Haengt das Repo nach diesem Lauf immer noch hinter seiner Gegenstelle?
+    public var stillBehind: Bool { behind > 0 && !action.changedSomething }
+
     /// Ein Satz fuer das Statusfenster.
     public var summary: String {
         switch action {
@@ -173,6 +183,39 @@ public final class GitSync {
         return results
     }
 
+    /// Was der Lauf ergeben hat, in einem Satz.
+    ///
+    /// Vorher stand hier "Kein Repo hing hinter seiner Gegenstelle zurueck",
+    /// sobald nichts vorgespult wurde. Das war falsch, sobald ein Repo zwar
+    /// zurueckhing, aber ausgelassen werden musste, und genau das ist der Fall,
+    /// den der Nutzer sehen will.
+    public static func summary(of results: [GitRepoResult]) -> String {
+        let forwarded = results.count { $0.action.changedSomething }
+        let stuck = results.count(where: \.stillBehind)
+        let failed = results.count { result in
+            if case .failed = result.action { return true }
+            return false
+        }
+
+        var parts: [String] = []
+        if forwarded > 0 {
+            parts.append(
+                Format.count(forwarded, singular: "Repo", plural: "Repos") + " vorgespult"
+            )
+        }
+        if stuck > 0 {
+            parts.append(
+                Format.count(stuck, singular: "Repo hängt", plural: "Repos hängen")
+                    + " weiter zurück"
+            )
+        }
+        if failed > 0 {
+            parts.append("\(failed) mit Fehler")
+        }
+        guard !parts.isEmpty else { return "Alle Repos stehen auf dem Stand ihrer Gegenstelle." }
+        return parts.joined(separator: ", ") + "."
+    }
+
     // MARK: - Intern
 
     private func name(_ root: String) -> String {
@@ -236,9 +279,16 @@ public final class GitSync {
             )
         }
 
-        let dirty = try await runner.run(["status", "--porcelain"], in: directory)
+        // `--untracked-files=no` mit Absicht: ein Vorspulschritt scheitert an
+        // geaenderten versionierten Dateien, nicht an unbekannten. Wer in einem
+        // Entwicklungsordner arbeitet, hat fast immer welche herumliegen, und
+        // mit ihnen als Hinderungsgrund liefe dieser Schritt so gut wie nie.
+        // Wuerde ein ankommender Commit eine davon ueberschreiben, verweigert
+        // `merge --ff-only` von sich aus, und das faengt der Aufruf unten ab.
+        let dirty = try await runner.run(
+            ["status", "--porcelain", "--untracked-files=no"], in: directory
+        )
         if !dirty.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // Ein Vorspulschritt scheiterte hier an geaenderten Dateien.
             return GitRepoResult(
                 root: root, branch: branch, behind: behind, ahead: 0,
                 action: .skipped(.dirtyWorktree)

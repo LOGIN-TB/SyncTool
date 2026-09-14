@@ -100,6 +100,72 @@ struct GitSyncTests {
         #expect(!git.calls.contains { $0.first == "merge" })
     }
 
+    /// In einem Entwicklungsordner liegt fast immer etwas Unbekanntes herum.
+    /// Zaehlte das als schmutzig, liefe der Vorspulschritt so gut wie nie.
+    @Test("Unversionierte Dateien halten den Vorspulschritt nicht auf")
+    func untrackedFilesDoNotBlock() async {
+        let git = healthyGit(behind: 2, ahead: 0)
+        let result = await run(git)
+        #expect(result.action == .fastForwarded(commits: 2))
+        #expect(git.calls.contains(["status", "--porcelain", "--untracked-files=no"]))
+    }
+
+    @Test("Verweigert git das Vorspulen, steht der Grund in der Zeile des Repos")
+    func refusedFastForwardIsReported() async {
+        // Der Netz darunter: `merge --ff-only` verweigert von sich aus, wenn ein
+        // ankommender Commit eine unbekannte Datei ueberschreiben wuerde.
+        let git = healthyGit(behind: 2, ahead: 0)
+        git.answers["merge"] = FakeGit.result(
+            status: 128, err: "untracked working tree files would be overwritten"
+        )
+        let result = await run(git)
+        #expect(result.action == .failed("untracked working tree files would be overwritten"))
+    }
+
+    // MARK: - Zusammenfassung
+
+    private func result(behind: Int, action: GitAction) -> GitRepoResult {
+        GitRepoResult(root: "R/", branch: "main", behind: behind, action: action)
+    }
+
+    @Test("Ein Repo, das weiter zurückhängt, verschwindet nicht in der Meldung")
+    func summaryNamesWhatIsStillBehind() {
+        // Genau der Fehler aus dem Feld: zwei Repos hingen zurück, keines liess
+        // sich vorspulen, und die Meldung sagte "Kein Repo hing zurück".
+        let text = GitSync.summary(of: [
+            result(behind: 2, action: .skipped(.dirtyWorktree)),
+            result(behind: 5, action: .skipped(.diverged)),
+        ])
+        #expect(text == "2 Repos hängen weiter zurück.")
+    }
+
+    @Test("Vorgespult und hängengeblieben stehen nebeneinander")
+    func summaryCombinesBothOutcomes() {
+        let text = GitSync.summary(of: [
+            result(behind: 3, action: .fastForwarded(commits: 3)),
+            result(behind: 1, action: .skipped(.dirtyWorktree)),
+            result(behind: 0, action: .failed("kaputt")),
+        ])
+        #expect(text == "1 Repo vorgespult, 1 Repo hängt weiter zurück, 1 mit Fehler.")
+    }
+
+    @Test("Ist alles auf Stand, sagt die Meldung das auch")
+    func summaryWhenEverythingIsLevel() {
+        let text = GitSync.summary(of: [
+            result(behind: 0, action: .upToDate),
+            result(behind: 0, action: .upToDate),
+        ])
+        #expect(text == "Alle Repos stehen auf dem Stand ihrer Gegenstelle.")
+    }
+
+    @Test("Nur ein Repo auf Stand gehört nicht ins Statusfenster")
+    func onlyNoteworthyResultsNeedAttention() {
+        #expect(!result(behind: 0, action: .upToDate).needsAttention)
+        #expect(result(behind: 2, action: .skipped(.dirtyWorktree)).needsAttention)
+        #expect(result(behind: 2, action: .skipped(.dirtyWorktree)).stillBehind)
+        #expect(!result(behind: 2, action: .fastForwarded(commits: 2)).stillBehind)
+    }
+
     @Test("Beide Seiten haben eigene Commits: da entscheidet ein Mensch")
     func divergedIsSkipped() async {
         let result = await run(healthyGit(behind: 2, ahead: 1))

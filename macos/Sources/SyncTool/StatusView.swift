@@ -195,17 +195,16 @@ struct StatusView: View {
         VStack(alignment: .leading, spacing: 14) {
             statusHeader(status)
 
+            GitSection(
+                remoteLabel: remoteLabel,
+                units: status.gitUnits,
+                results: state.gitResults
+            )
+
             if !status.isInSync {
                 VStack(alignment: .leading, spacing: 8) {
                     if !status.conflicts.isEmpty {
                         ConflictSection(remoteLabel: remoteLabel, conflicts: status.conflicts)
-                    }
-                    if !status.gitUnits.isEmpty {
-                        GitSection(
-                            remoteLabel: remoteLabel,
-                            units: status.gitUnits,
-                            results: state.gitResults
-                        )
                     }
                     DriftSection(
                         title: "Vom \(remoteLabel) holen",
@@ -773,6 +772,11 @@ private struct ConflictSection: View {
 }
 
 /// Ein Repo als eine Zeile, statt tausender `.git`-Pfade.
+///
+/// Gespeist aus zwei Quellen: der Abweichung zum Sync-Ziel und dem Abgleich mit
+/// der Gegenstelle. Beides einzeln reicht nicht. Ein Repo kann zum Sync-Ziel
+/// passen und trotzdem hinter seiner Gegenstelle haengen, und dann stand hier
+/// vorher gar nichts.
 private struct GitSection: View {
     let remoteLabel: String
     let units: [GitUnit]
@@ -780,68 +784,94 @@ private struct GitSection: View {
     let results: [String: GitRepoResult]
     @State private var expanded = true
 
+    struct Row: Identifiable {
+        var id: String { root }
+        let root: String
+        let unit: GitUnit?
+        let result: GitRepoResult?
+
+        var displayName: String { root.isEmpty ? "Stammordner" : String(root.dropLast()) }
+    }
+
+    /// Nur was eine Handlung oder eine Erklaerung braucht. Ein Repo, das zum
+    /// Sync-Ziel passt und auf dem Stand seiner Gegenstelle steht, gehoert
+    /// nicht in eine Liste, in der nichts zu tun ist.
+    private var rows: [Row] {
+        let byRoot = Dictionary(units.map { ($0.root, $0) }, uniquingKeysWith: { first, _ in first })
+        let roots = Set(byRoot.keys).union(results.filter(\.value.needsAttention).keys)
+        return roots.sorted().map { Row(root: $0, unit: byRoot[$0], result: results[$0]) }
+    }
+
     private var diverged: Int { units.count { $0.state == .conflict } }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(
-                    "Ein Repo geht als Ganzes über, .git eingeschlossen. Läuft es auf beiden "
-                        + "Seiten auseinander, bleibt es in diesem Lauf unberührt: ein halb "
-                        + "übertragenes .git ist schlimmer als ein veraltetes."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        if !rows.isEmpty {
+            DisclosureGroup(isExpanded: $expanded) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(
+                        "Ein Repo geht als Ganzes über, .git eingeschlossen. Läuft es auf beiden "
+                            + "Seiten auseinander, bleibt es in diesem Lauf unberührt: ein halb "
+                            + "übertragenes .git ist schlimmer als ein veraltetes."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                BoundedList(count: units.count, rowHeight: 32) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(units) { unit in
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(unit.displayName)
-                                    .font(.caption.monospaced())
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                Text(detail(for: unit))
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
+                    BoundedList(count: rows.count, rowHeight: 32) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(rows) { row in
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(row.displayName)
+                                        .font(.caption.monospaced())
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Text(detail(for: row))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                             }
                         }
                     }
                 }
+                .padding(.leading, 18)
+                .padding(.top, 4)
+            } label: {
+                Label(
+                    "Git-Repos: \(Format.number(rows.count))",
+                    systemImage: "arrow.triangle.branch"
+                )
+                .foregroundStyle(diverged > 0 ? Color.orange : Color.primary)
             }
-            .padding(.leading, 18)
-            .padding(.top, 4)
-        } label: {
-            Label(
-                "Git-Repos: \(Format.number(units.count))",
-                systemImage: "arrow.triangle.branch"
-            )
-            .foregroundStyle(diverged > 0 ? Color.orange : Color.primary)
         }
     }
 
-    private func detail(for unit: GitUnit) -> String {
+    private func detail(for row: Row) -> String {
         var parts: [String] = []
-        switch unit.state {
+        switch row.unit?.state {
         case .incoming:
             parts.append(
                 "vom \(remoteLabel) holen, "
-                    + Format.count(unit.itemCount, singular: "Eintrag", plural: "Einträge")
+                    + Format.count(
+                        row.unit?.itemCount ?? 0, singular: "Eintrag", plural: "Einträge"
+                    )
             )
         case .outgoing:
             parts.append(
                 "zum \(remoteLabel) schicken, "
-                    + Format.count(unit.itemCount, singular: "Eintrag", plural: "Einträge")
+                    + Format.count(
+                        row.unit?.itemCount ?? 0, singular: "Eintrag", plural: "Einträge"
+                    )
             )
         case .conflict:
             parts.append(
-                "läuft auseinander: \(unit.incomingCount) \(remoteLabel), "
-                    + "\(unit.outgoingCount) hier"
+                "läuft auseinander: \(row.unit?.incomingCount ?? 0) \(remoteLabel), "
+                    + "\(row.unit?.outgoingCount ?? 0) hier"
             )
+        case nil:
+            parts.append("passt zum \(remoteLabel)")
         }
-        if let result = results[unit.root] { parts.append(result.summary) }
+        if let result = row.result { parts.append(result.summary) }
         return parts.joined(separator: " · ")
     }
 }

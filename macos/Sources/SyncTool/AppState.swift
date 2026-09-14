@@ -665,13 +665,11 @@ final class AppState: ObservableObject {
         )
         gitResults = Dictionary(uniqueKeysWithValues: results.map { ($0.root, $0) })
 
-        let changed = results.count { $0.action.changedSomething }
+        let summary = GitSync.summary(of: results)
         if !quiet {
-            notice = changed > 0
-                ? "\(Format.count(changed, singular: "Repo", plural: "Repos")) vorgespult."
-                : "Kein Repo hing hinter seiner Gegenstelle zurück."
-        } else if changed > 0 {
-            append("\(Format.count(changed, singular: "Repo", plural: "Repos")) vorgespult.")
+            notice = summary
+        } else {
+            append(summary)
         }
     }
 
