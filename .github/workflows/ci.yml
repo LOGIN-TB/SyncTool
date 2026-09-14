@@ -45,6 +45,23 @@ jobs:
       - name: Bauen
         run: make app
 
+      # Damit sich ein Bau auch ohne eigenes Xcode herunterladen laesst:
+      # gh run download -n SyncTool-app
+      #
+      # Als tar und nicht als blanke .app: ein Artefakt wird gezippt, und dabei
+      # gehen das Ausfuehrbarkeitsbit und die Symlinks eines Bundles verloren.
+      # Der Bau ist unsigniert, er taugt fuer den eigenen Rechner und nicht zur
+      # Weitergabe. Signiert und notarisiert wird ueber Scripts/release.sh.
+      - name: App einpacken
+        run: tar -czf SyncTool-app.tar.gz -C macos/build SyncTool.app
+
+      - name: App als Artefakt
+        uses: actions/upload-artifact@v4
+        with:
+          name: SyncTool-app
+          path: SyncTool-app.tar.gz
+          retention-days: 14
+
       # Der eine Punkt, der sich von einem Entwicklerrechner unterscheiden kann.
       # Der Laeufer hat volles Xcode, hier also ein zweiter Beweis, dass der
       # Universal-Weg ohne xcbuild trotzdem beide Architekturen liefert.
