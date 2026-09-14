@@ -37,6 +37,32 @@ Symlinks, Rechte, Zeiten, komprimiert.
 Bei einem Lauf im Dateisystem fällt das `z` weg. Komprimieren würde dort nur
 die Luft komprimieren und Rechenzeit kosten.
 
+## Prüfsummen und Git-Repos
+
+Ein Ref ist immer gleich lang. Ohne Prüfsummenvergleich entscheiden Größe und
+Zeitstempel, und zwei Refs gleicher Länge mit Zeitstempeln innerhalb einer
+Sekunde gelten dann als gleich. Für einen Stammordner voller Repos gehört das
+Häkchen „Prüfsumme" deshalb an, und dafür braucht es ein rsync 3.x.
+
+## Die Filterregeln des Git-Laufs
+
+Der Lauf, der ein Repo als Einheit überträgt, nimmt über `--filter=merge` nur
+die freigegebenen `.git`-Zweige auf und wirft mit einer letzten Zeile alles
+andere heraus. Jedes Elternsegment steht als eigene Zeile darin, sonst steigt
+rsync gar nicht erst in den Ordner hinab.
+
+Darauf steht die ganze Konstruktion: ein ausgeschlossener Eintrag ist bei rsync
+zugleich vor `--delete` geschützt, solange `--delete-excluded` fehlt. Der Lauf
+darf deshalb `--delete` tragen und räumt trotzdem nur innerhalb der Zweige auf.
+Das gilt für rsync 3.x und für openrsync gleichermaßen; beide Fassungen sind mit
+denselben Integrationstests belegt.
+
+Ein Unterschied bleibt: **`--max-delete` bricht bei rsync 3.x ab (Status 25), bei
+openrsync nicht.** Dort heißt es nur „once MAX files have been deleted, do not
+delete any more files", der Lauf hört still auf zu löschen und hinterlässt genau
+den Mischzustand, um den es geht. SyncTool zählt die Löschzeilen deshalb nach
+und bricht selbst ab. Siehe [git.md](git.md).
+
 ## Auf der Gegenseite muss rsync liegen
 
 Das ist die Bedingung, an der reines SFTP scheitert. rsync braucht auf der

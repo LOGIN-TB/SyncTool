@@ -40,6 +40,29 @@ ausgeführt wird, gewinnt.
 Prüfsummen kommen nur mit einem rsync 3.x mit. openrsync kennt das Feld nicht,
 dort läuft der Vergleich über Größe und Zeitstempel. Siehe [rsync.md](rsync.md).
 
+## Git-Repos als Einheit
+
+Nach der Entscheidung je Pfad kommt eine zweite Runde: alles, was unterhalb
+eines `.git/` liegt, wird aus den Listen genommen und zu einer Entscheidung je
+Repo zusammengefasst. Eine Löschung zählt dabei als Schreibbewegung auf der
+Seite, die geräumt hat.
+
+| unter `<repo>/.git/` | zählt als |
+| --- | --- |
+| holen, oder auf dem Server gelöscht | die Gegenseite hat geschrieben |
+| schicken, oder hier gelöscht | dieser Rechner hat geschrieben |
+| Konflikt | beide |
+
+Beide, also läuft das Repo auseinander und bleibt in diesem Lauf unberührt. Nur
+eine, also geht es als Ganzes in diese Richtung. Keine, also gibt es nichts zu
+tun. Siehe [git.md](git.md).
+
+Die Bestandsliste folgt dem: ein ausgelassener Zweig behält den gemessenen
+gemeinsamen Bestand, ein übertragener folgt der Quellseite, unabhängig vom Haken
+„Löschungen mitziehen". Ohne die erste Regel gälten die Fernpfade eines
+ausgelassenen Repos beim nächsten Prüfen als hier gelöscht, ohne die zweite
+käme ein gerade entfernter Ref wieder in den Bestand.
+
 ## Gelöscht oder neu
 
 Eine Datei, die es nur auf einer Seite gibt, ist zweideutig: entweder ist sie

@@ -117,8 +117,89 @@ public final class BackupEngine {
         try ZipArguments.writeFileList(paths, to: listURL)
 
         let missing = try await pack(
-            profile: profile, partial: partial, listURL: listURL,
+            workingDirectory: profile.localRoot, partial: partial, listURL: listURL,
             total: paths.count, onLog: onLog, onProgress: onProgress
+        )
+
+        try FileManager.default.moveItem(at: partial, to: archive)
+        let archiveBytes =
+            (try? archive.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap(Int64.init) ?? 0
+
+        return BackupResult(
+            archive: archive,
+            entryCount: paths.count,
+            rawBytes: inventory.totalBytes,
+            archiveBytes: archiveBytes,
+            duration: Date().timeIntervalSince(started),
+            missing: missing
+        )
+    }
+
+    /// Packt ein einzelnes Repo, bevor daran etwas geaendert wird.
+    ///
+    /// Dieselbe Mechanik wie das Backup des Stammordners, nur mit dem
+    /// Repo-Ordner als Endpunkt: derselbe Bestandslauf, dieselbe Namensgebung
+    /// (`podcast-loginai-bak-2026-09-14.zip`), dieselbe Teildatei, die erst am
+    /// Ende umbenannt wird. Ueberschrieben wird nie.
+    ///
+    /// Die Ausschlussliste des Profils gilt auch hier: sonst laege
+    /// `node_modules` in jedem Schnappschuss, und der Schnappschuss dauerte
+    /// laenger als der Eingriff, vor dem er schuetzen soll.
+    ///
+    /// `root` ist der Repo-Stamm relativ zum Stammordner, leer heisst der
+    /// Stammordner selbst.
+    public func snapshotRepository(
+        root: String,
+        profile: Profile,
+        rsyncPath: String,
+        ignoreSpace: Bool = false,
+        at date: Date = Date(),
+        onLog: ((String) -> Void)? = nil
+    ) async throws -> BackupResult {
+        let started = Date()
+        guard FileManager.default.isExecutableFile(atPath: zipPath) else {
+            throw BackupError.zipMissing(zipPath)
+        }
+        let folder = root.isEmpty
+            ? profile.localRoot
+            : (profile.localRoot as NSString).appendingPathComponent(root)
+
+        let workspace = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let inventory = try await takeInventory(
+            profile: profile, rsyncPath: rsyncPath, in: workspace, folder: folder,
+            excludes: Profile.systemExcludes + profile.excludes, onLog: onLog
+        )
+        let paths = ZipArguments.fileList(from: inventory)
+        guard !paths.isEmpty else { throw BackupError.nothingToArchive }
+
+        try BackupTarget.validate(
+            destination: profile.backupDestination,
+            // Gegen den Stammordner pruefen, nicht gegen das Repo: ein Ziel
+            // irgendwo darin waere genauso falsch.
+            source: profile.localRoot,
+            requiredBytes: inventory.totalBytes,
+            ignoreSpace: ignoreSpace
+        )
+
+        let directory = URL(fileURLWithPath: profile.backupDestination, isDirectory: true)
+        guard
+            let archive = BackupName.nextFree(
+                root: folder, date: date, in: directory,
+                exists: { FileManager.default.fileExists(atPath: $0.path) }
+            )
+        else { throw BackupError.noFreeName(profile.backupDestination) }
+
+        let partial = BackupName.partial(for: archive)
+        try? FileManager.default.removeItem(at: partial)
+
+        let listURL = workspace.appendingPathComponent("list.txt")
+        try ZipArguments.writeFileList(paths, to: listURL)
+
+        let missing = try await pack(
+            workingDirectory: folder, partial: partial, listURL: listURL,
+            total: paths.count, onLog: onLog, onProgress: nil
         )
 
         try FileManager.default.moveItem(at: partial, to: archive)
@@ -147,14 +228,22 @@ public final class BackupEngine {
     }
 
     private func takeInventory(
-        profile: Profile, rsyncPath: String, in workspace: URL, onLog: ((String) -> Void)?
+        profile: Profile,
+        rsyncPath: String,
+        in workspace: URL,
+        folder: String? = nil,
+        excludes: [String] = Profile.systemExcludes,
+        onLog: ((String) -> Void)?
     ) async throws -> SideInventory {
         let empty = workspace.appendingPathComponent("empty", isDirectory: true)
         try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
-        let excludeFile = try RsyncArguments.writeExcludeFile(
-            Profile.systemExcludes, in: workspace
-        )
+        let excludeFile = try RsyncArguments.writeExcludeFile(excludes, in: workspace)
 
+        // Ein Unterordner statt des Stammordners: dieselbe Mechanik, nur ein
+        // anderer Endpunkt. `remote` bleibt leer, der Lauf ist rein lokal.
+        let endpoints = folder.map {
+            SyncEndpoints(local: SyncEndpoints.withTrailingSlash($0), remote: "")
+        }
         let plan = ProcessPlan(
             executable: rsyncPath,
             arguments: RsyncArguments.inventoryArguments(
@@ -163,7 +252,8 @@ public final class BackupEngine {
                     side: .local,
                     emptyDirectory: empty.path,
                     excludeFile: excludeFile,
-                    wantsRawNames: true
+                    wantsRawNames: true,
+                    endpoints: endpoints
                 )
             )
         )
@@ -198,7 +288,7 @@ public final class BackupEngine {
     }
 
     private func pack(
-        profile: Profile,
+        workingDirectory: String,
         partial: URL,
         listURL: URL,
         total: Int,
@@ -208,7 +298,7 @@ public final class BackupEngine {
         let plan = ProcessPlan(
             executable: zipPath,
             arguments: ZipArguments.arguments(archive: partial.path),
-            workingDirectory: profile.localRoot,
+            workingDirectory: workingDirectory,
             input: .file(listURL.path)
         )
         onLog?("$ \(plan.displayCommand)")

@@ -28,6 +28,12 @@ build/   dist/   .next/   .turbo/   .gradle/   DerivedData/
 `.git/` steht bewusst **nicht** darin: ohne Historie ist der Abgleich zwischen
 Rechnern wertlos.
 
+Innerhalb eines `.git/`-Zweigs greift die Liste allerdings nicht. Der Lauf, der
+ein Repo als Einheit überträgt, lässt `--exclude-from` weg. Der Grund ist
+rsyncs Doppelrolle: ein Ausschluss schützt zugleich vor `--delete`. Mit der
+Liste im Lauf überlebte ein `.git/gc.log` der Empfängerseite, und heraus käme
+wieder ein halbes `.git`. Siehe [git.md](git.md).
+
 Wer wirklich alles abgleichen will, leert die Liste in den Einstellungen unter
 „Abgleich". Die Liste gehört zum Profil, zwei Profile können verschiedene
 Ausschlüsse haben.

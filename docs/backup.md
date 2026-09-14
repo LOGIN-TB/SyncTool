@@ -43,6 +43,17 @@ Systemdateien wie `.DS_Store` und die Archive selbst.
 Die Ausschlussliste des Profils gilt für den Abgleich, nicht für das Backup.
 Siehe [ausschluesse.md](ausschluesse.md).
 
+## Der Schnappschuss vor einem Eingriff am Repo
+
+Bevor SyncTool ein Git-Repo vorspult, packt es den Repo-Ordner nach derselben
+Mechanik: derselbe Bestandslauf, derselbe Namensbau
+(`Projekt-bak-2026-09-14.zip`), dieselbe Teildatei, die erst am Ende umbenannt
+wird. Fehlt der Zielordner im Profil, unterbleibt der Eingriff.
+
+Hier gilt die Ausschlussliste des Profils dann doch, `.git` ausgenommen: sonst
+läge `node_modules` in jedem Schnappschuss, und das Sichern dauerte länger als
+der Eingriff, vor dem es schützt. Siehe [git.md](git.md).
+
 ## Ablauf
 
 Erst wird der Bestand aufgenommen, dann gepackt. Geschrieben wird nach

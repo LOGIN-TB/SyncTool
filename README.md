@@ -148,6 +148,20 @@ Nach jedem Prüfen steht unter dem Ergebnis, wie viele Einträge jede Seite hat
 und wie viele die Ausschlussliste verdeckt. Die Zahlen sind dafür da, sie gegen
 einen FTP-Client zu halten. Siehe [docs/ausschluesse.md](docs/ausschluesse.md).
 
+## Git-Repos
+
+Ein Repo ist keine Menge unabhängiger Dateien. `refs/`, `logs/`, `packed-refs`
+und `objects/` ergeben nur zusammen einen Stand, und Datei für Datei abgeglichen
+entsteht daraus ein Mischzustand, nach dem git „N commits behind" meldet.
+Deshalb geht `.git/` als Einheit über die Leitung, in einer Richtung, mit
+Löschen darin. Läuft ein Repo auf beiden Seiten auseinander, bleibt es in diesem
+Lauf unberührt.
+
+Den Stand eines Repos hält nicht das Sync-Ziel, sondern die Gegenstelle. Nach
+jeder Übertragung holt SyncTool deshalb je Repo von dort und spult vor, soweit
+das ohne Zusammenführen geht. Vorher wandert der Repo-Ordner in ein Zip.
+Gepusht wird nie. Siehe [docs/git.md](docs/git.md).
+
 ## Löschen
 
 `--delete` läuft nur, wenn es im Profil erlaubt ist **und** im Statusfenster

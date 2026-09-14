@@ -252,6 +252,173 @@ struct RsyncArgumentsTests {
         let path = try #require(written)
         #expect(try String(contentsOfFile: path, encoding: .utf8) == "node_modules/\n.DS_Store\n")
     }
+
+    // MARK: - Git-Lauf
+
+    private func makeDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    @Test("Die Git-Zweige stehen hinter den Mustern des Nutzers")
+    func excludeFileCarriesBranches() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let path = try #require(
+            try RsyncArguments.writeExcludeFile(
+                ["node_modules/"], branches: ["b/.git/", "a/.git/"], in: directory
+            )
+        )
+        #expect(
+            try String(contentsOfFile: path, encoding: .utf8)
+                == "node_modules/\n/a/.git/\n/b/.git/\n"
+        )
+    }
+
+    @Test("Auch ohne Muster des Nutzers werden die Zweige ausgeschlossen")
+    func excludeFileWithBranchesOnly() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let path = try #require(
+            try RsyncArguments.writeExcludeFile([], branches: ["a/.git/"], in: directory)
+        )
+        #expect(try String(contentsOfFile: path, encoding: .utf8) == "/a/.git/\n")
+    }
+
+    @Test("Die Filterdatei nennt jedes Elternsegment einzeln")
+    func gitFilterFileNamesEveryAncestor() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let path = try #require(
+            try RsyncArguments.writeGitFilterFile(
+                branches: ["a/b/.git/", "Projekt/.git/"], in: directory
+            )
+        )
+        // Ohne die Zeilen fuer `a/` und `a/b/` steigt rsync gar nicht erst in
+        // den Ordner hinab. Die letzte Zeile haelt den Rest des Baums heraus.
+        #expect(
+            try String(contentsOfFile: path, encoding: .utf8) == """
+                - .synctool-partial/
+                + /Projekt/
+                + /Projekt/.git/
+                + /Projekt/.git/**
+                + /a/
+                + /a/b/
+                + /a/b/.git/
+                + /a/b/.git/**
+                - *
+
+                """
+        )
+    }
+
+    @Test("Ein Repo im Stammordner braucht kein Elternsegment")
+    func gitFilterFileForRepositoryAtRoot() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let path = try #require(
+            try RsyncArguments.writeGitFilterFile(branches: [".git/"], in: directory)
+        )
+        #expect(
+            try String(contentsOfFile: path, encoding: .utf8) == """
+                - .synctool-partial/
+                + /.git/
+                + /.git/**
+                - *
+
+                """
+        )
+    }
+
+    @Test("Ohne Zweige keine Filterdatei")
+    func gitFilterFileSkippedWhenEmpty() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        #expect(try RsyncArguments.writeGitFilterFile(branches: [], in: directory) == nil)
+    }
+
+    @Test("Sonderzeichen im Repo-Pfad werden in beiden Dateien maskiert")
+    func branchPathsAreEscaped() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let excludes = try #require(
+            try RsyncArguments.writeExcludeFile([], branches: ["Pro*jekt/.git/"], in: directory)
+        )
+        #expect(try String(contentsOfFile: excludes, encoding: .utf8) == "/Pro\\*jekt/.git/\n")
+
+        let filter = try #require(
+            try RsyncArguments.writeGitFilterFile(branches: ["Pro*jekt/.git/"], in: directory)
+        )
+        let text = try String(contentsOfFile: filter, encoding: .utf8)
+        #expect(text.contains("+ /Pro\\*jekt/\n"))
+        #expect(text.contains("+ /Pro\\*jekt/.git/**\n"))
+    }
+
+    private func gitArguments(
+        profile: Profile, direction: SyncDirection = .pull, maxDelete: Int = 7
+    ) -> [String] {
+        RsyncArguments.gitArguments(
+            profile: profile,
+            direction: direction,
+            options: .init(
+                dryRun: false,
+                includeDeletes: false,
+                remoteShell: "/tmp/rsh",
+                excludeFile: "/tmp/excludes",
+                gitFilterFile: "/tmp/gitfilter",
+                gitMaxDelete: maxDelete
+            )
+        )
+    }
+
+    @Test("Der Git-Lauf loescht auch dann, wenn das Profil es nicht erlaubt")
+    func gitRunAlwaysDeletes() {
+        // Geraeumt wird nur innerhalb der Zweige, die die Filterdatei aufnimmt.
+        // Alles andere ist ausgeschlossen und damit vor `--delete` geschuetzt.
+        let args = gitArguments(profile: makeProfile(deleteAllowed: false))
+        #expect(args.contains("--delete"))
+        #expect(args.contains("--max-delete=7"))
+        #expect(args.contains("--filter=merge /tmp/gitfilter"))
+    }
+
+    @Test("Der Git-Lauf nimmt die Ausschlussliste des Nutzers nicht mit")
+    func gitRunIgnoresUserExcludes() {
+        let args = gitArguments(profile: makeProfile())
+        #expect(!args.contains { $0.hasPrefix("--exclude-from") })
+    }
+
+    @Test("Der Git-Lauf nimmt die Notbremse aus der Messung, nicht aus dem Profil")
+    func gitRunUsesMeasuredLimit() {
+        let args = gitArguments(profile: makeProfile(deleteAllowed: true, maxDelete: 100))
+        #expect(args.contains("--max-delete=7"))
+        #expect(!args.contains("--max-delete=100"))
+    }
+
+    @Test("Der Git-Lauf haengt Quelle und Ziel richtig herum an")
+    func gitRunEndpointOrder() {
+        let profile = makeProfile()
+        let pull = gitArguments(profile: profile, direction: .pull)
+        #expect(pull.suffix(2) == [profile.remoteSource, profile.localSource])
+        let push = gitArguments(profile: profile, direction: .push)
+        #expect(push.suffix(2) == [profile.localSource, profile.remoteSource])
+    }
+
+    @Test("Der Hauptlauf loescht weiterhin nur auf Anforderung")
+    func mainRunStillNeedsPermissionToDelete() {
+        let args = arguments(
+            profile: makeProfile(deleteAllowed: false), direction: .pull, dryRun: false,
+            includeDeletes: true
+        )
+        #expect(!args.contains("--delete"))
+    }
 }
 
 @Suite("ssh-Optionen")

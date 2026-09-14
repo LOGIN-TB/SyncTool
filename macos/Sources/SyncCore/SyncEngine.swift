@@ -20,6 +20,7 @@ public struct TransferProgress: Sendable {
 public enum SyncEngineError: LocalizedError {
     case invalidProfile([String])
     case remotePathMissing(String)
+    case gitDeleteLimit(limit: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -27,6 +28,10 @@ public enum SyncEngineError: LocalizedError {
             return problems.joined(separator: " ")
         case .remotePathMissing(let path):
             return "Der Ordner \(path) existiert auf dem Server nicht. „Verbindung testen“ legt ihn an."
+        case .gitDeleteLimit(let limit):
+            return "In den Git-Repos standen mehr als \(limit) Löschungen an. "
+                + "Mindestens ein .git ist deshalb nur halb übertragen. "
+                + "Noch einmal prüfen und den Lauf wiederholen."
         }
     }
 }
@@ -210,6 +215,37 @@ public final class SyncEngine {
 
     // MARK: - Übertragen
 
+    /// Zuschlag auf die gemessene Zahl der Loeschungen im Git-Lauf.
+    /// Zwischen Pruefen und Uebertragen bewegt sich etwas.
+    private static let gitDeleteMargin = 50
+
+    /// Die Notbremse des Git-Laufs, aus den gemessenen Bestaenden gerechnet.
+    ///
+    /// `profile.maxDelete` taugt hier nicht: nach einem `git gc` auf der
+    /// Senderseite faellt drueben ein Vielfaches davon weg. Gezaehlt wird
+    /// deshalb, was auf der Empfaengerseite unter den freigegebenen Zweigen
+    /// liegt und auf der Senderseite nicht, also genau das, was der Lauf
+    /// wegraeumen wird. Bewusst ueber die Pfadmengen und nicht ueber die
+    /// Drift-Listen: Verzeichnisse mit Inhalt stehen dort nicht drin, rsync
+    /// loescht sie aber mit.
+    ///
+    /// Ohne gemessene Bestaende bleibt es beim Anschlag aus dem Profil.
+    private func gitDeleteLimit(
+        mirrored: [String],
+        direction: SyncDirection,
+        remotePaths: Set<String>,
+        localPaths: Set<String>,
+        profile: Profile
+    ) -> Int {
+        guard !remotePaths.isEmpty, !localPaths.isEmpty else { return profile.maxDelete }
+        let receiver = direction == .pull ? localPaths : remotePaths
+        let sender = direction == .pull ? remotePaths : localPaths
+        let doomed = receiver.subtracting(sender).count { path in
+            mirrored.contains { path.hasPrefix($0) }
+        }
+        return doomed + Self.gitDeleteMargin
+    }
+
     public func transfer(
         profile: Profile,
         password: String?,
@@ -217,6 +253,9 @@ public final class SyncEngine {
         includeDeletes: Bool,
         protectedPaths: [String] = [],
         expectedItems: Int,
+        /// Die Git-Repos aus der Pruefung. Was in diese Richtung laeuft, geht im
+        /// zweiten Lauf als Einheit hinueber, alles andere bleibt unberuehrt.
+        gitUnits: [GitUnit] = [],
         /// Die beim Pruefen gemessenen Bestaende. Daraus entsteht der neue
         /// gemeinsame Bestand, statt ihn aus dem lokalen Baum zu raten.
         remotePaths: Set<String> = [],
@@ -233,13 +272,26 @@ public final class SyncEngine {
             remotePaths: remotePaths, localPaths: localPaths, onLog: onLog
         )
 
+        let wanted: GitUnitState = direction == .pull ? .incoming : .outgoing
+        let mirrored = gitUnits.filter { $0.state == wanted }.map(\.branch).sorted()
+        // Der Hauptlauf laesst jeden `.git`-Zweig aus, auch die, die gleich
+        // drankommen: dort gelten andere Regeln.
+        let skipped = gitUnits.map(\.branch).sorted()
+        let frozen = skipped.filter { !mirrored.contains($0) }
+
         let session = try openSession(for: profile, password: password)
         defer { session?.stop() }
 
         let context = try prepare(
-            session: session, profile: profile, protectedPaths: protectedPaths
+            session: session, profile: profile, protectedPaths: protectedPaths,
+            skippedBranches: skipped, gitBranches: mirrored
         )
         defer { context.cleanup() }
+
+        let deleteLimit = gitDeleteLimit(
+            mirrored: mirrored, direction: direction,
+            remotePaths: remotePaths, localPaths: localPaths, profile: profile
+        )
         let options = RsyncArguments.Options(
             dryRun: false,
             includeDeletes: includeDeletes,
@@ -247,43 +299,107 @@ public final class SyncEngine {
             excludeFile: context.excludeFile,
             protectFile: context.protectFile,
             endpoints: context.endpoints,
-            flavour: context.flavour
+            flavour: context.flavour,
+            gitFilterFile: context.gitFilterFile,
+            gitMaxDelete: deleteLimit
         )
 
         var completed = 0
-        let outcome = try await run(
-            profile: profile,
-            direction: direction,
-            options: options,
-            rsyncPath: rsyncPath,
-            environment: context.environment,
-            onLog: onLog,
-            onLine: { line in
-                guard let item = ItemizeParser.parseLine(line) else { return }
-                completed += 1
-                onProgress?(
-                    TransferProgress(
-                        completed: completed,
-                        total: max(expectedItems, completed),
-                        currentPath: item.path
-                    )
+        let report: (String) -> Void = { line in
+            guard let item = ItemizeParser.parseLine(line) else { return }
+            completed += 1
+            onProgress?(
+                TransferProgress(
+                    completed: completed,
+                    total: max(expectedItems, completed),
+                    currentPath: item.path
                 )
-            }
-        )
-
-        stateStore.recordSync(for: profile)
-        inventoryStore.record(
-            for: profile,
-            commonPaths: SyncInventory.afterTransfer(
-                previous: inventoryStore.load(for: profile)?.paths ?? [],
-                remote: remotePaths,
-                local: localPaths,
-                direction: direction,
-                includeDeletes: includeDeletes && profile.deleteAllowed,
-                succeeded: outcome.succeeded || outcome.isWarningOnly
             )
-        )
+        }
+
+        /// Schreibt den gemeinsamen Bestand fort. Bei einem Fehlschlag bleibt
+        /// nur die Schnittmenge uebrig, sonst gaelte ein nie angekommener Pfad
+        /// beim naechsten Pruefen als hier geloescht.
+        func record(succeeded: Bool) {
+            stateStore.recordSync(for: profile)
+            inventoryStore.record(
+                for: profile,
+                commonPaths: SyncInventory.afterTransfer(
+                    previous: inventoryStore.load(for: profile)?.paths ?? [],
+                    remote: remotePaths,
+                    local: localPaths,
+                    direction: direction,
+                    includeDeletes: includeDeletes && profile.deleteAllowed,
+                    succeeded: succeeded,
+                    mirroredBranches: succeeded ? mirrored : [],
+                    frozenBranches: frozen
+                )
+            )
+        }
+
+        var outcome: RsyncOutcome
+        do {
+            outcome = try await run(
+                arguments: RsyncArguments.arguments(
+                    profile: profile, direction: direction, options: options
+                ),
+                direction: direction,
+                remotePath: profile.remotePath,
+                rsyncPath: rsyncPath,
+                environment: context.environment,
+                onLog: onLog,
+                onLine: report
+            )
+
+            // Erst der Hauptlauf, dann die Repos. Bricht etwas dazwischen ab,
+            // bleibt das `.git` der Empfaengerseite auf seinem alten, in sich
+            // stimmigen Stand. Andersherum zeigten neue Refs auf eine alte
+            // Arbeitskopie, und das sieht nach verlorener Arbeit aus.
+            if !mirrored.isEmpty {
+                onLog?("\(mirrored.count) Git-Repo(s) als Einheit übertragen")
+                let gitOutcome = try await run(
+                    arguments: RsyncArguments.gitArguments(
+                        profile: profile, direction: direction, options: options
+                    ),
+                    direction: direction,
+                    remotePath: profile.remotePath,
+                    rsyncPath: rsyncPath,
+                    environment: context.environment,
+                    onLog: onLog,
+                    onLine: report
+                )
+                outcome = merged(outcome, gitOutcome)
+
+                // openrsync bricht an `--max-delete` nicht ab, es hoert still
+                // auf zu loeschen. Genau dann bleibt ein halbes `.git` liegen,
+                // deshalb wird hier nachgezaehlt.
+                let removed = gitOutcome.items.count { $0.kind == .deleted }
+                if removed >= deleteLimit {
+                    record(succeeded: false)
+                    throw SyncEngineError.gitDeleteLimit(limit: deleteLimit)
+                }
+            }
+        } catch {
+            record(succeeded: false)
+            throw error
+        }
+
+        record(succeeded: outcome.succeeded || outcome.isWarningOnly)
         return outcome
+    }
+
+    /// Fuegt die Ergebnisse beider Laeufe zusammen. Der schlechtere Status
+    /// gewinnt, damit ein Fehler im zweiten Lauf nicht hinter der Null des
+    /// ersten verschwindet.
+    private func merged(_ first: RsyncOutcome, _ second: RsyncOutcome) -> RsyncOutcome {
+        func rank(_ status: Int32) -> Int { status == 0 ? 0 : (status == 24 ? 1 : 2) }
+        return RsyncOutcome(
+            status: rank(second.status) > rank(first.status) ? second.status : first.status,
+            items: first.items + second.items,
+            errorLines: first.errorLines + second.errorLines,
+            statsLines: first.statsLines + second.statsLines,
+            skippedLinkAttributes: first.skippedLinkAttributes + second.skippedLinkAttributes
+        )
     }
 
     // MARK: - Absturzsicherung
@@ -331,6 +447,9 @@ public final class SyncEngine {
         let remoteShell: String
         let excludeFile: String?
         let protectFile: String?
+        /// Einschlussregeln des Git-Laufs. `nil` heisst: in dieser Richtung
+        /// steht kein Repo an.
+        let gitFilterFile: String?
         let environment: [String: String]
         let endpoints: SyncEndpoints
         let flavour: RsyncFlavour
@@ -374,7 +493,11 @@ public final class SyncEngine {
     }
 
     private func prepare(
-        session: SSHSession?, profile: Profile, protectedPaths: [String] = []
+        session: SSHSession?,
+        profile: Profile,
+        protectedPaths: [String] = [],
+        skippedBranches: [String] = [],
+        gitBranches: [String] = []
     ) throws -> RunContext {
         let remoteShell: String
         let directory: URL
@@ -394,12 +517,18 @@ public final class SyncEngine {
             ownsDirectory = true
         }
 
-        let excludeFile = try RsyncArguments.writeExcludeFile(profile.excludes, in: directory)
+        let excludeFile = try RsyncArguments.writeExcludeFile(
+            profile.excludes, branches: skippedBranches, in: directory
+        )
         let protectFile = try RsyncArguments.writeProtectFile(protectedPaths, in: directory)
+        let gitFilterFile = try RsyncArguments.writeGitFilterFile(
+            branches: gitBranches, in: directory
+        )
         return RunContext(
             remoteShell: remoteShell,
             excludeFile: excludeFile,
             protectFile: protectFile,
+            gitFilterFile: gitFilterFile,
             environment: environment,
             endpoints: SyncEndpoints.resolve(profile: profile),
             flavour: RsyncFlavour.forTransport(profile.transport),
@@ -423,9 +552,10 @@ public final class SyncEngine {
     }
 
     private func run(
-        profile: Profile,
+        arguments: [String],
         direction: SyncDirection,
-        options: RsyncArguments.Options,
+        /// Nur fuer die Fehlermeldung, wenn die Gegenseite den Ordner nicht hat.
+        remotePath: String,
         rsyncPath: String,
         environment: [String: String],
         onLog: ((String) -> Void)?,
@@ -433,9 +563,7 @@ public final class SyncEngine {
     ) async throws -> RsyncOutcome {
         let plan = RsyncPlan(
             executable: rsyncPath,
-            arguments: RsyncArguments.arguments(
-                profile: profile, direction: direction, options: options
-            ),
+            arguments: arguments,
             environment: environment
         )
         onLog?("$ \(plan.displayCommand)")
@@ -448,7 +576,7 @@ public final class SyncEngine {
         if !outcome.succeeded && !outcome.isWarningOnly {
             let detail = outcome.errorLines.last ?? "keine Fehlermeldung"
             if detail.lowercased().contains("no such file") && direction == .pull {
-                throw SyncEngineError.remotePathMissing(profile.remotePath)
+                throw SyncEngineError.remotePathMissing(remotePath)
             }
             throw RsyncError.failed(status: outcome.status, detail: detail)
         }

@@ -51,6 +51,11 @@ final class AppState: ObservableObject {
     @Published var progress: TransferProgress?
     @Published var log: [String] = []
     @Published var rsyncInfo: RsyncInfo?
+    /// `nil` heisst: kein git gefunden. Dann laeuft der Abgleich mit der
+    /// Gegenstelle nicht, der Abgleich mit dem Sync-Ziel sehr wohl.
+    @Published var gitInfo: GitInfo?
+    /// Ergebnis des letzten Abgleichs mit der Gegenstelle, je Repo-Stamm.
+    @Published var gitResults: [String: GitRepoResult] = [:]
     @Published var hostKeyCandidates: [HostKeyCandidate] = []
     @Published var notice: String?
     @Published var lastBackup: BackupResult?
@@ -123,6 +128,7 @@ final class AppState: ObservableObject {
             MainActor.assumeIsolated { self?.flushSave() }
         }
         Task { await refreshRsync(preferred: selectedProfile?.rsyncPath ?? "") }
+        Task { await refreshGit() }
     }
 
     // MARK: - Profile
@@ -323,6 +329,13 @@ final class AppState: ObservableObject {
     ///
     /// Vorher las die Funktion selbst `selectedProfile`, wurde aber beim
     /// Profilwechsel nie gerufen; die angezeigte Fassung war dann veraltet.
+    /// Einmal beim Start. `/usr/bin/git` ist nur eine Weiche auf die Command
+    /// Line Tools und oeffnet einen Systemdialog, wenn die fehlen; das gehoert
+    /// nicht in jeden Lauf.
+    func refreshGit() async {
+        gitInfo = await GitLocator.locate()
+    }
+
     func refreshRsync(preferred: String) async {
         rsyncInfo = await RsyncLocator.locate(preferred: preferred)
     }
@@ -543,9 +556,7 @@ final class AppState: ObservableObject {
 
     func transfer(_ direction: SyncDirection, includeDeletes: Bool) async {
         guard let profile = selectedProfile, let rsync = rsyncInfo else { return }
-        let expected =
-            direction == .pull
-            ? (status?.incoming.count ?? 0) : (status?.outgoing.count ?? 0)
+        let expected = status?.itemCount(for: direction) ?? 0
         // Was auf der Empfaengerseite neu ist, darf --delete nicht wegraeumen.
         let protectedPaths =
             direction == .pull
@@ -568,6 +579,7 @@ final class AppState: ObservableObject {
                 includeDeletes: includeDeletes,
                 protectedPaths: includeDeletes ? protectedPaths : [],
                 expectedItems: expected,
+                gitUnits: status?.gitUnits ?? [],
                 remotePaths: status?.remotePaths ?? [],
                 localPaths: status?.localPaths ?? [],
                 rsyncPath: rsync.path,
@@ -580,6 +592,9 @@ final class AppState: ObservableObject {
             )
             phase = .idle
             progress = nil
+            // Die Gegenstelle ist das führende System: erst jetzt, wenn die
+            // Dateien liegen, wird gegen sie abgeglichen.
+            await reconcileRepositories(quiet: true)
             // Erst neu prüfen, dann melden: check() räumt notice ab.
             await check()
             notice = "\(direction.label) abgeschlossen: \(outcome.items.count) Einträge."
@@ -596,6 +611,68 @@ final class AppState: ObservableObject {
     func cancel() {
         processRunner.cancel()
         append("Abbruch angefordert …")
+    }
+
+    // MARK: - Abgleich mit der Gegenstelle
+
+    /// Steht ein Repo an, das sich gegen seine Gegenstelle abgleichen lässt?
+    var canReconcileRepositories: Bool {
+        gitInfo != nil && !(status?.localPaths.isEmpty ?? true)
+    }
+
+    /// Holt je Repo den Stand der Gegenstelle und spult vor, soweit das ohne
+    /// Zusammenführen geht.
+    ///
+    /// `quiet` unterdrückt nur die Meldung: nach einer Übertragung steht dort
+    /// schon, wie viele Einträge gewandert sind, und zwei Meldungen
+    /// hintereinander überschreiben sich.
+    func reconcileRepositories(quiet: Bool = false) async {
+        guard let profile = selectedProfile, let rsync = rsyncInfo, let git = gitInfo else {
+            if !quiet { notice = "Kein git gefunden. Ohne git gibt es hier nichts abzugleichen." }
+            return
+        }
+        let roots = GitRepositories.roots(in: status?.localPaths ?? [])
+        guard !roots.isEmpty else {
+            if !quiet { notice = "Im Stammordner liegt kein Git-Repo." }
+            return
+        }
+        guard !profile.backupDestination.isEmpty else {
+            if !quiet {
+                notice = "Ohne Zielordner für Sicherungen wird nichts angefasst. "
+                    + "In den Einstellungen unter „Backup“ einen wählen."
+            }
+            return
+        }
+
+        // Eigener Name: `engine` ist in dieser Klasse die Sync-Maschine.
+        let backup = backupEngine
+        let sync = GitSync(
+            runner: GitCommandRunner(gitPath: git.path),
+            // Ohne Sicherung kein Eingriff: wirft das hier, bleibt das Repo,
+            // wie es ist, und der Fehlschlag steht in der Zeile des Repos.
+            snapshot: { root in
+                try await backup.snapshotRepository(
+                    root: root, profile: profile, rsyncPath: rsync.path
+                ).archive
+            }
+        )
+        let results = await sync.run(
+            roots: roots,
+            localRoot: profile.localRoot,
+            onLog: { [weak self] line in
+                Task { @MainActor in self?.append(line) }
+            }
+        )
+        gitResults = Dictionary(uniqueKeysWithValues: results.map { ($0.root, $0) })
+
+        let changed = results.count { $0.action.changedSomething }
+        if !quiet {
+            notice = changed > 0
+                ? "\(Format.count(changed, singular: "Repo", plural: "Repos")) vorgespult."
+                : "Kein Repo hing hinter seiner Gegenstelle zurück."
+        } else if changed > 0 {
+            append("\(Format.count(changed, singular: "Repo", plural: "Repos")) vorgespult.")
+        }
     }
 
     // MARK: - Backup

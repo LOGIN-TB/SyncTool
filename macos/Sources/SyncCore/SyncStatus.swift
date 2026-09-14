@@ -99,6 +99,9 @@ public struct SyncStatus: Sendable {
     /// was lokal gelöscht wurde, nicht was dort neu entstanden ist.
     public let deletionsOnPush: [ChangeItem]
     public let conflicts: [ConflictItem]
+    /// Git-Repos, zusammengefasst zu je einem Eintrag. Die Pfade darunter
+    /// stehen deshalb in keiner der Listen oben.
+    public let gitUnits: [GitUnit]
     /// Was beide Seiten tatsächlich enthalten. Die Zahlen lassen sich gegen
     /// einen FTP-Client halten, genau dafür sind sie da.
     public let report: InventoryReport
@@ -109,11 +112,35 @@ public struct SyncStatus: Sendable {
 
     public var isInSync: Bool {
         incoming.isEmpty && outgoing.isEmpty && conflicts.isEmpty
-            && deletionsOnPull.isEmpty && deletionsOnPush.isEmpty
+            && deletionsOnPull.isEmpty && deletionsOnPush.isEmpty && gitUnits.isEmpty
     }
 
-    public var incomingBytes: Int64 { incoming.reduce(0) { $0 + $1.size } }
-    public var outgoingBytes: Int64 { outgoing.reduce(0) { $0 + $1.size } }
+    /// Die Einheiten, die in dieser Richtung ueber die Leitung gehen.
+    public func gitUnits(for direction: SyncDirection) -> [GitUnit] {
+        gitUnits.filter { $0.state == (direction == .pull ? .incoming : .outgoing) }
+    }
+
+    /// Die Zweige, die dieser Lauf auslaesst: alles, was nicht in seine
+    /// Richtung laeuft. Ein halb uebertragenes `.git` ist schlimmer als ein
+    /// veraltetes, deshalb bleiben sie unberuehrt.
+    public func frozenBranches(for direction: SyncDirection) -> [String] {
+        let mirrored = Set(gitUnits(for: direction).map(\.branch))
+        return gitUnits.map(\.branch).filter { !mirrored.contains($0) }
+    }
+
+    public var incomingBytes: Int64 {
+        incoming.reduce(0) { $0 + $1.size } + gitUnits(for: .pull).reduce(0) { $0 + $1.bytes }
+    }
+    public var outgoingBytes: Int64 {
+        outgoing.reduce(0) { $0 + $1.size } + gitUnits(for: .push).reduce(0) { $0 + $1.bytes }
+    }
+
+    /// Eintraege, die ein Lauf in dieser Richtung anfasst. Speist die
+    /// Fortschrittsanzeige und den Zustand des Knopfes.
+    public func itemCount(for direction: SyncDirection) -> Int {
+        let drift = direction == .pull ? incoming.count : outgoing.count
+        return drift + gitUnits(for: direction).reduce(0) { $0 + $1.itemCount }
+    }
 
     /// Beim Hochladen mit Löschen vor dem Wegräumen zu schützen: neu auf dem Server.
     public var protectedOnPush: [String] {
@@ -132,6 +159,7 @@ public struct SyncStatus: Sendable {
         deletionsOnPull: [ChangeItem],
         deletionsOnPush: [ChangeItem],
         conflicts: [ConflictItem],
+        gitUnits: [GitUnit] = [],
         report: InventoryReport = InventoryReport(),
         remotePaths: Set<String> = [],
         localPaths: Set<String> = []
@@ -143,6 +171,7 @@ public struct SyncStatus: Sendable {
         self.deletionsOnPull = deletionsOnPull
         self.deletionsOnPush = deletionsOnPush
         self.conflicts = conflicts
+        self.gitUnits = gitUnits
         self.report = report
         self.remotePaths = remotePaths
         self.localPaths = localPaths
@@ -229,14 +258,26 @@ public enum DriftResolver {
             }
         }
 
+        // Erst jetzt falten: die Entscheidung je Pfad steht, und was unter
+        // einem `.git` liegt, wird zu einer Zeile je Repo.
+        let folded = GitRepositories.fold(
+            incoming: incoming,
+            outgoing: outgoing,
+            conflicts: conflicts,
+            deletionsOnPull: deletionsOnPull,
+            deletionsOnPush: deletionsOnPush,
+            bare: GitRepositories.bareBranches(remote: remote, local: local)
+        )
+
         return SyncStatus(
             checkedAt: checkedAt,
             lastSync: lastSync,
-            incoming: incoming,
-            outgoing: outgoing,
-            deletionsOnPull: deletionsOnPull,
-            deletionsOnPush: deletionsOnPush,
-            conflicts: conflicts,
+            incoming: folded.incoming,
+            outgoing: folded.outgoing,
+            deletionsOnPull: folded.deletionsOnPull,
+            deletionsOnPush: folded.deletionsOnPush,
+            conflicts: folded.conflicts,
+            gitUnits: folded.units,
             report: InventoryReport(
                 remote: remote, local: local, excludedPaths: excludedPaths
             ),

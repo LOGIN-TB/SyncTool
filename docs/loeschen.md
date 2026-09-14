@@ -32,6 +32,30 @@ Dateien der Gegenseite weg.
 Die Schutzregeln stehen vor den Ausschlüssen in der Kommandozeile, weil bei
 rsync die erste passende Regel gewinnt.
 
+## Die eine Ausnahme: innerhalb von `.git/`
+
+Der Lauf, der ein Git-Repo als Einheit überträgt, löscht immer, auch wenn
+Löschen im Profil aus ist und im Statusfenster nichts angehakt wurde. Das ist
+kein Widerspruch zu den drei Zustimmungen, sondern ihre Begründung von der
+anderen Seite: geräumt wird nur innerhalb eines `.git/`, dessen Inhalt in diesem
+Moment vollständig auf der Gegenseite liegt. Was dort wegfällt, ist
+wiederherstellbar. Ein halbes `.git` ist es nicht.
+
+Abgesichert ist das über die Filterdatei des Laufs: sie nimmt genau die
+freigegebenen `.git`-Zweige auf, alles andere fällt mit einer letzten Zeile
+heraus. Ausgeschlossene Einträge schützt rsync von sich aus vor `--delete`,
+solange `--delete-excluded` fehlt, und das gilt für rsync 3.x und openrsync
+gleichermaßen.
+
+Dieser Lauf hat eine eigene Notbremse. `--max-delete` aus dem Profil taugt hier
+nicht: nach einem `git gc` auf der Senderseite fallen drüben leicht tausende
+lose Objekte weg. Die Grenze kommt deshalb aus den Beständen, die das Prüfen
+gemessen hat: gezählt wird, was auf der Empfängerseite unter den freigegebenen
+Zweigen liegt und auf der Senderseite nicht, plus ein Zuschlag. Weil openrsync an der Grenze nicht abbricht, sondern
+still aufhört zu löschen, zählt SyncTool die Löschzeilen danach nach und bricht
+selbst ab, statt ein halb übertragenes `.git` liegenzulassen. Siehe
+[git.md](git.md).
+
 ## Eine leere Quelle bricht ab
 
 Der gefährlichste Fall braucht keinen Fehler in der App: der Stammordner liegt

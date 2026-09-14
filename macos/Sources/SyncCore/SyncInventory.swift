@@ -34,25 +34,71 @@ public struct SyncInventory: Codable, Sendable {
         local: Set<String>,
         direction: SyncDirection,
         includeDeletes: Bool,
-        succeeded: Bool
+        succeeded: Bool,
+        /// `.git`-Zweige, die dieser Lauf vollstaendig uebertragen hat.
+        mirroredBranches: [String] = [],
+        /// `.git`-Zweige, die dieser Lauf ausgelassen hat.
+        frozenBranches: [String] = []
     ) -> Set<String> {
         // Kein sauberer Durchlauf: Was vorher schon auf beiden Seiten lag, liegt
         // dort weiterhin. Alles daruber hinaus waere geraten.
         guard succeeded else { return remote.intersection(local) }
 
+        let base: Set<String>
         switch (direction, includeDeletes) {
         case (.pull, true):
             // Danach spiegelt die lokale Seite den Server.
-            return remote
+            base = remote
         case (.pull, false):
             // Was auf dem Server geloescht wurde, liegt hier noch. Faellt es aus
             // dem Bestand, gilt es beim naechsten Pruefen als Neuzugang von hier.
-            return remote.union(previous.intersection(local))
+            base = remote.union(previous.intersection(local))
         case (.push, true):
-            return local
+            base = local
         case (.push, false):
-            return local.union(previous.intersection(remote))
+            base = local.union(previous.intersection(remote))
         }
+
+        guard !mirroredBranches.isEmpty || !frozenBranches.isEmpty else { return base }
+        return withBranches(
+            base: base, remote: remote, local: local, direction: direction,
+            mirrored: mirroredBranches, frozen: frozenBranches
+        )
+    }
+
+    /// Zieht die `.git`-Zweige aus dem Ergebnis heraus und setzt sie neu.
+    ///
+    /// Ein Git-Lauf folgt anderen Regeln als der Hauptlauf, und die
+    /// Bestandsliste muss beides abbilden. Ohne das erste Stueck landet ein
+    /// ausgelassenes Konflikt-Repo bei `(.pull, includeDeletes: true)` mit allen
+    /// Fernpfaden im gemeinsamen Bestand, obwohl sie hier nie ankamen; beim
+    /// naechsten Pruefen gaelten sie als hier geloescht. Ohne das zweite nimmt
+    /// `remote ∪ (previous ∩ local)` einen Pfad wieder auf, den der Git-Lauf
+    /// gerade lokal entfernt hat.
+    private static func withBranches(
+        base: Set<String>,
+        remote: Set<String>,
+        local: Set<String>,
+        direction: SyncDirection,
+        mirrored: [String],
+        frozen: [String]
+    ) -> Set<String> {
+        let all = mirrored + frozen
+        var result = base.filter { path in !all.contains { path.hasPrefix($0) } }
+
+        // Ausgelassen heisst: dort hat sich nichts bewegt, also ist der
+        // gemeinsame Bestand der gemessene.
+        let common = remote.intersection(local)
+        for branch in frozen {
+            result.formUnion(common.filter { $0.hasPrefix(branch) })
+        }
+        // Gespiegelt heisst: die Empfaengerseite entspricht jetzt der Quelle,
+        // mit Loeschungen, unabhaengig vom Haken im Statusfenster.
+        let sender = direction == .pull ? remote : local
+        for branch in mirrored {
+            result.formUnion(sender.filter { $0.hasPrefix(branch) })
+        }
+        return result
     }
 
     /// Macht ein Inventar aus der alten Version wieder brauchbar.

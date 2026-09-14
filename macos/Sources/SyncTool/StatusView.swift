@@ -200,6 +200,13 @@ struct StatusView: View {
                     if !status.conflicts.isEmpty {
                         ConflictSection(remoteLabel: remoteLabel, conflicts: status.conflicts)
                     }
+                    if !status.gitUnits.isEmpty {
+                        GitSection(
+                            remoteLabel: remoteLabel,
+                            units: status.gitUnits,
+                            results: state.gitResults
+                        )
+                    }
                     DriftSection(
                         title: "Vom \(remoteLabel) holen",
                         systemImage: "arrow.down.circle",
@@ -246,13 +253,21 @@ struct StatusView: View {
         }
     }
 
+    /// Ein Repo, das auseinanderlaeuft, wiegt so schwer wie ein Dateikonflikt:
+    /// in beiden Faellen muss jemand entscheiden.
+    private func diverged(_ status: SyncStatus) -> Int {
+        status.gitUnits.count { $0.state == .conflict }
+    }
+
     private func symbol(for status: SyncStatus) -> String {
-        if !status.conflicts.isEmpty { return "exclamationmark.triangle.fill" }
+        if !status.conflicts.isEmpty || diverged(status) > 0 {
+            return "exclamationmark.triangle.fill"
+        }
         return status.isInSync ? "checkmark.circle.fill" : "arrow.left.arrow.right.circle.fill"
     }
 
     private func color(for status: SyncStatus) -> Color {
-        if !status.conflicts.isEmpty { return .orange }
+        if !status.conflicts.isEmpty || diverged(status) > 0 { return .orange }
         return status.isInSync ? .green : .accentColor
     }
 
@@ -262,9 +277,15 @@ struct StatusView: View {
                 status.conflicts.count, singular: "Konflikt", plural: "Konflikte"
             )
         }
+        if diverged(status) > 0 {
+            return Format.count(
+                diverged(status), singular: "Repo läuft", plural: "Repos laufen"
+            ) + " auseinander"
+        }
         if status.isInSync { return "Alles auf gleichem Stand" }
         let offen = status.incoming.count + status.outgoing.count
             + status.deletionsOnPull.count + status.deletionsOnPush.count
+            + status.gitUnits.count
         return Format.count(offen, singular: "Unterschied", plural: "Unterschiede")
     }
 
@@ -368,17 +389,33 @@ struct StatusView: View {
         }
     }
 
+    @ViewBuilder
     private func actions(_ status: SyncStatus) -> some View {
+        transferActions(status)
+        if state.canReconcileRepositories {
+            Button {
+                Task { await state.reconcileRepositories() }
+            } label: {
+                Label("Repos mit der Gegenstelle abgleichen", systemImage: "arrow.triangle.branch")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
+            .buttonStyle(.bordered)
+            .disabled(state.phase.isBusy)
+        }
+    }
+
+    private func transferActions(_ status: SyncStatus) -> some View {
         HStack(spacing: 10) {
             transferButton(
                 title: "Herunterladen", symbol: "arrow.down.circle",
-                count: status.incoming.count, deletions: planned(status.deletionsOnPull),
+                count: status.itemCount(for: .pull), deletions: planned(status.deletionsOnPull),
                 shortcut: .downArrow
             ) { start(.pull, deletions: status.deletionsOnPull) }
 
             transferButton(
                 title: "Hochladen", symbol: "arrow.up.circle",
-                count: status.outgoing.count, deletions: planned(status.deletionsOnPush),
+                count: status.itemCount(for: .push), deletions: planned(status.deletionsOnPush),
                 shortcut: .upArrow
             ) { start(.push, deletions: status.deletionsOnPush) }
         }
@@ -732,6 +769,80 @@ private struct ConflictSection: View {
             )
             .foregroundStyle(.orange)
         }
+    }
+}
+
+/// Ein Repo als eine Zeile, statt tausender `.git`-Pfade.
+private struct GitSection: View {
+    let remoteLabel: String
+    let units: [GitUnit]
+    /// Was der Abgleich mit der Gegenstelle ergeben hat, je Repo-Stamm.
+    let results: [String: GitRepoResult]
+    @State private var expanded = true
+
+    private var diverged: Int { units.count { $0.state == .conflict } }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(
+                    "Ein Repo geht als Ganzes über, .git eingeschlossen. Läuft es auf beiden "
+                        + "Seiten auseinander, bleibt es in diesem Lauf unberührt: ein halb "
+                        + "übertragenes .git ist schlimmer als ein veraltetes."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                BoundedList(count: units.count, rowHeight: 32) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(units) { unit in
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(unit.displayName)
+                                    .font(.caption.monospaced())
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text(detail(for: unit))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.leading, 18)
+            .padding(.top, 4)
+        } label: {
+            Label(
+                "Git-Repos: \(Format.number(units.count))",
+                systemImage: "arrow.triangle.branch"
+            )
+            .foregroundStyle(diverged > 0 ? Color.orange : Color.primary)
+        }
+    }
+
+    private func detail(for unit: GitUnit) -> String {
+        var parts: [String] = []
+        switch unit.state {
+        case .incoming:
+            parts.append(
+                "vom \(remoteLabel) holen, "
+                    + Format.count(unit.itemCount, singular: "Eintrag", plural: "Einträge")
+            )
+        case .outgoing:
+            parts.append(
+                "zum \(remoteLabel) schicken, "
+                    + Format.count(unit.itemCount, singular: "Eintrag", plural: "Einträge")
+            )
+        case .conflict:
+            parts.append(
+                "läuft auseinander: \(unit.incomingCount) \(remoteLabel), "
+                    + "\(unit.outgoingCount) hier"
+            )
+        }
+        if let result = results[unit.root] { parts.append(result.summary) }
+        return parts.joined(separator: " · ")
     }
 }
 

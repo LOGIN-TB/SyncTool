@@ -111,6 +111,22 @@ struct GeneralSettingsView: View {
                 }
             }
 
+            Section("git") {
+                LabeledContent("Gefunden") {
+                    Text(state.gitInfo?.versionLine ?? "kein git gefunden")
+                        .font(.callout)
+                        .textSelection(.enabled)
+                }
+                Text(
+                    "Damit gleicht SyncTool jedes Repo im Stammordner gegen seine Gegenstelle "
+                        + "ab und spult vor, soweit das ohne Zusammenführen geht. Ohne git "
+                        + "läuft nur der Abgleich mit dem Sync-Ziel."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("SSH-Schlüssel") {
                 Text(
                     state.keyExists

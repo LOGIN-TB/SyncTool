@@ -92,6 +92,68 @@ final class InventoryStoreTests {
         #expect(paths == ["bleibt.txt"])
     }
 
+    // MARK: - Git-Zweige
+
+    @Test("Ein ausgelassener Zweig behält den gemessenen gemeinsamen Bestand")
+    func frozenBranchKeepsTheMeasuredIntersection() {
+        // Das Konflikt-Repo bleibt unberührt. Ohne die Sonderregel lieferte
+        // `(.pull, includeDeletes: true)` alle Fernpfade zurück, und beim
+        // nächsten Prüfen gälten sie hier als gelöscht.
+        let paths = SyncInventory.afterTransfer(
+            previous: [],
+            remote: ["a/.git/HEAD", "a/.git/refs/heads/main", "a/quelle.swift"],
+            local: ["a/.git/HEAD", "a/.git/logs/HEAD", "a/quelle.swift"],
+            direction: .pull,
+            includeDeletes: true,
+            succeeded: true,
+            frozenBranches: ["a/.git/"]
+        )
+        #expect(paths == ["a/.git/HEAD", "a/quelle.swift"])
+    }
+
+    @Test("Ein gespiegelter Zweig folgt der Quelle, auch ohne Löschhaken")
+    func mirroredBranchFollowsTheSender() {
+        // Der Git-Lauf löscht innerhalb des Zweigs immer. Ohne die Sonderregel
+        // nähme `remote ∪ (previous ∩ local)` den alten Ref wieder auf.
+        let paths = SyncInventory.afterTransfer(
+            previous: ["a/.git/refs/heads/alt", "a/quelle.swift"],
+            remote: ["a/.git/HEAD", "a/quelle.swift"],
+            local: ["a/.git/HEAD", "a/.git/refs/heads/alt", "a/quelle.swift"],
+            direction: .pull,
+            includeDeletes: false,
+            succeeded: true,
+            mirroredBranches: ["a/.git/"]
+        )
+        #expect(paths == ["a/.git/HEAD", "a/quelle.swift"])
+    }
+
+    @Test("Beim Hochladen ist die lokale Seite die Quelle des Zweigs")
+    func mirroredBranchOnPushFollowsLocal() {
+        let paths = SyncInventory.afterTransfer(
+            previous: [],
+            remote: ["a/.git/veraltet"],
+            local: ["a/.git/HEAD"],
+            direction: .push,
+            includeDeletes: false,
+            succeeded: true,
+            mirroredBranches: ["a/.git/"]
+        )
+        #expect(paths == ["a/.git/HEAD"])
+    }
+
+    @Test("Ohne Zweige bleibt die Rechnung dieselbe wie vorher")
+    func withoutBranchesNothingChanges() {
+        let unverändert = SyncInventory.afterTransfer(
+            previous: ["alt.txt"],
+            remote: ["neu.txt"],
+            local: ["alt.txt"],
+            direction: .pull,
+            includeDeletes: false,
+            succeeded: true
+        )
+        #expect(unverändert == ["neu.txt", "alt.txt"])
+    }
+
     /// Nach einem abgebrochenen Lauf ist unbekannt, was wirklich drüben ankam.
     /// Die Schnittmenge ist die einzige Aussage, die sicher stimmt.
     @Test("Ein gescheiterter Lauf fällt auf die Schnittmenge zurück")

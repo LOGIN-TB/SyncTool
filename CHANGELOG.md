@@ -1,5 +1,26 @@
 # Änderungen
 
+## 1.5.0 (unveröffentlicht)
+
+### Git-Repos
+
+- **`.git/` geht als Einheit über die Leitung.** Bisher wurde jede Datei darin
+  einzeln abgeglichen. Weil ein Repo aus Dateien besteht, die beide Rechner
+  schreiben, kamen nur die reinen Neuzugänge an, während `refs/heads/*`,
+  `logs/HEAD` und `packed-refs` stehenblieben. Danach meldete git „N commits
+  behind", obwohl der Abgleich sauber durchgelaufen war.
+- Im Statusfenster steht je Repo eine Zeile statt tausender `.git`-Pfade.
+- Läuft ein Repo auf beiden Seiten auseinander, bleibt es in diesem Lauf
+  unberührt und wird gemeldet.
+- Der Lauf für die Repos löscht innerhalb von `.git/`, auch ohne Löschhaken,
+  und nur dort. Er hat eine eigene Notbremse aus der Messung des Prüflaufs.
+- **Abgleich mit der Gegenstelle.** Nach jeder Übertragung holt SyncTool je Repo
+  von dort und spult vor, soweit das ohne Zusammenführen geht. Vorher wandert
+  der Repo-Ordner in ein Zip. Gepusht wird nie.
+- Unter „Programm, Allgemein" steht, welches git gefunden wurde.
+
+Siehe [docs/git.md](docs/git.md).
+
 ## 1.4.0 (2026-08-20)
 
 Erste öffentliche Fassung.

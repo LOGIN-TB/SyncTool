@@ -90,6 +90,19 @@ inferred from two diff reports.
 
 Conflicts are shown, not resolved. Whichever direction you run first wins.
 
+## Git repositories
+
+A repository is not a set of independent files. `refs/`, `logs/`, `packed-refs`
+and `objects/` only make sense together, and syncing them file by file leaves a
+mixed state that makes git report "N commits behind". So `.git/` travels as one
+unit, in one direction, with deletion inside it. A repository that has diverged
+on both sides is left untouched for that run.
+
+The state of a repository is held by its remote, not by the sync target. After
+every transfer SyncTool therefore fetches per repository and fast-forwards where
+that works without merging, zipping the repository folder first. It never
+pushes. See [docs/git.md](docs/git.md) (German).
+
 ## Deleting
 
 `--delete` runs only if it is allowed in the profile **and** ticked in the status
