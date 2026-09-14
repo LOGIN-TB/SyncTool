@@ -871,6 +871,10 @@ private struct GitSection: View {
                 "läuft auseinander: \(row.unit?.incomingCount ?? 0) \(remoteLabel), "
                     + "\(row.unit?.outgoingCount ?? 0) hier"
             )
+        case .settled:
+            // Steht hier nur, falls die Zeile es doch bis hierher schafft:
+            // `rows` nimmt gleichstehende Repos gar nicht erst auf.
+            parts.append("gleicher Stand wie auf dem \(remoteLabel)")
         case nil:
             parts.append("passt zum \(remoteLabel)")
         }
