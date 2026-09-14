@@ -8,12 +8,16 @@ public enum GitUnitState: String, Sendable {
     case outgoing
     /// Beide. Dann bleibt das Repo in diesem Lauf unberuehrt.
     case conflict
+    /// Beide Seiten stehen auf denselben Zeigern. Die Dateien darunter weichen
+    /// ab, weil git unabhaengig umgepackt hat, aber das Repo ist dasselbe.
+    case settled
 
     public var label: String {
         switch self {
         case .incoming: return "vom Server holen"
         case .outgoing: return "zum Server schicken"
         case .conflict: return "läuft auseinander"
+        case .settled: return "gleicher Stand"
         }
     }
 }
@@ -65,8 +69,29 @@ public struct GitUnit: Sendable, Hashable, Identifiable {
         switch state {
         case .incoming: return incomingCount
         case .outgoing: return outgoingCount
-        case .conflict: return incomingCount + outgoingCount + conflictCount
+        case .conflict, .settled: return incomingCount + outgoingCount + conflictCount
         }
+    }
+
+    /// Bricht einen Gleichstand auf, wenn diese Seite nachweislich dem
+    /// fuehrenden System entspricht.
+    ///
+    /// Laufen die beiden Seiten des Sync-Ziels auseinander, kann der Vergleich
+    /// allein nicht entscheiden. Steht das Repo hier aber auf dem Stand seiner
+    /// Gegenstelle, ist die Frage beantwortet: was hier liegt, liegt auch dort,
+    /// und was nur auf dem Sync-Ziel lag, liegt weiterhin auf dem Rechner, der
+    /// es hochgeladen hat.
+    public func resolved(with result: GitRepoResult?) -> GitUnit {
+        guard state == .conflict, result?.matchesRemote == true else { return self }
+        return GitUnit(
+            root: root,
+            branch: branch,
+            state: .outgoing,
+            incomingCount: incomingCount,
+            outgoingCount: outgoingCount,
+            conflictCount: conflictCount,
+            bytes: bytes
+        )
     }
 
     /// Fuer die Anzeige: ein leerer Stamm ist der Stammordner selbst.
@@ -167,7 +192,9 @@ public enum GitRepositories {
         conflicts: [ConflictItem],
         deletionsOnPull: [ChangeItem],
         deletionsOnPush: [ChangeItem],
-        bare: Set<String> = []
+        bare: Set<String> = [],
+        /// Zweige, deren Refs auf beiden Seiten uebereinstimmen.
+        settled: Set<String> = []
     ) -> Folded {
         var tallies: [String: Tally] = [:]
 
@@ -207,7 +234,12 @@ public enum GitRepositories {
             let remoteWrote = tally.incoming > 0 || tally.deletionsOnPull > 0
             let localWrote = tally.outgoing > 0 || tally.deletionsOnPush > 0
             let state: GitUnitState
-            if tally.conflicts > 0 || (remoteWrote && localWrote) {
+            if settled.contains(branch) {
+                // Dieselben Zeiger auf beiden Seiten. Was darunter abweicht,
+                // sind Packdateien, und die neu zu uebertragen brächte nichts
+                // ausser Last auf der Leitung.
+                state = .settled
+            } else if tally.conflicts > 0 || (remoteWrote && localWrote) {
                 state = .conflict
             } else if remoteWrote {
                 state = .incoming

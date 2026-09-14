@@ -19,6 +19,25 @@
   der Repo-Ordner in ein Zip. Gepusht wird nie.
 - Unter „Programm, Allgemein" steht, welches git gefunden wurde.
 
+- **Verglichen werden die Zeiger, nicht die Dateien.** git packt von sich aus
+  um, und danach haben beide Rechner dieselben Commits in verschieden benannten
+  Packdateien. Datei für Datei sah das aus wie beidseitige Arbeit: das Repo
+  galt als auseinandergelaufen, beide Knöpfe waren grau, und in der App gab es
+  keinen Weg weiter. Der Prüflauf holt jetzt `HEAD`, `packed-refs` und `refs/`
+  auch von der Gegenseite und entscheidet daran. Gleicher Stand heißt: nichts zu
+  tun, und die Packdateien wandern auch nicht mehr über die Leitung.
+- **Die Gegenstelle bricht einen Gleichstand auf.** Steht das Repo hier auf
+  ihrem Stand und ist die Arbeitskopie sauber, gewinnt diese Seite, und
+  „Hochladen" nimmt das Repo mit.
+- Unversionierte Dateien halten den Vorspulschritt nicht mehr auf. Vorher galt
+  jeder herumliegende tmp-Ordner als schmutzige Arbeitskopie, und der Schritt
+  lief so gut wie nie.
+- Die Meldung nach dem Abgleich sagt, was wirklich war. Vorher stand dort „Kein
+  Repo hing hinter seiner Gegenstelle zurück", sobald nichts vorgespult wurde,
+  auch wenn ein Repo zurückhing und nur ausgelassen werden musste.
+- Das Statusfenster zeigt auch Repos, die zum Sync-Ziel passen und trotzdem
+  hinter ihrer Gegenstelle hängen. Die standen vorher nirgends.
+
 Siehe [docs/git.md](docs/git.md).
 
 ## 1.4.0 (2026-08-20)

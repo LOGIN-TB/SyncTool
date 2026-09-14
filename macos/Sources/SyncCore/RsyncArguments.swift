@@ -317,6 +317,53 @@ public enum RsyncArguments {
         }
     }
 
+    /// Schreibt die Filterdatei fuer den Ref-Lauf.
+    ///
+    /// Nur `HEAD`, `packed-refs` und alles unter `refs/`. Das sind ein paar
+    /// Kilobyte je Repo, und daran laesst sich ablesen, ob beide Seiten auf
+    /// demselben Stand stehen, ohne die Packdateien anzufassen.
+    public static func writeRefFilterFile(
+        branches: [String], in directory: URL
+    ) throws -> String? {
+        var rules: [String] = []
+        var seen: Set<String> = []
+        for branch in branches.sorted() {
+            for prefix in ancestors(of: branch) where seen.insert(prefix).inserted {
+                rules.append("+ /" + escape(prefix))
+            }
+            let root = "/" + escape(branch)
+            rules.append("+ " + root + "HEAD")
+            rules.append("+ " + root + "packed-refs")
+            rules.append("+ " + root + "refs/")
+            rules.append("+ " + root + "refs/**")
+        }
+        guard !rules.isEmpty else { return nil }
+        rules.append("- *")
+        let url = directory.appendingPathComponent("reffilter")
+        try (rules.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+        return url.path
+    }
+
+    /// Holt die Refs der Gegenseite in einen Arbeitsordner.
+    ///
+    /// Kein `--delete`, kein `--checksum`, keine Ausschlussliste: der Ordner ist
+    /// jedes Mal neu und wird nach dem Lauf weggeraeumt.
+    public static func refArguments(
+        profile: Profile,
+        filterFile: String,
+        destination: String,
+        remoteShell: String,
+        flavour: RsyncFlavour,
+        endpoints: SyncEndpoints? = nil
+    ) -> [String] {
+        var args = ["-rlpt", "--filter=merge \(filterFile)"]
+        if flavour.usesRemoteShell { args += ["-e", remoteShell] }
+        let ends = endpoints ?? SyncEndpoints.resolve(profile: profile)
+        args.append(ends.remote)
+        args.append(destination.hasSuffix("/") ? destination : destination + "/")
+        return args
+    }
+
     /// Schreibt die Ausschlussliste in eine Datei fuer `--exclude-from`.
     ///
     /// Die `.git`-Zweige kommen hinter die Muster des Nutzers. Sie stehen als

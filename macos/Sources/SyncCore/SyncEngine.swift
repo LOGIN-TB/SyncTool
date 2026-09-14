@@ -124,6 +124,10 @@ public final class SyncEngine {
             local: local,
             lastSync: stateStore.load().lastSync(for: profile),
             knownPaths: inventoryStore.trustedPaths(for: profile, remotePaths: remote.paths),
+            settledGitBranches: try await settledBranches(
+                profile: profile, remote: remote, local: local, context: context,
+                rsyncPath: rsyncPath, onLog: onLog
+            ),
             excludedPaths: try await excludedPaths(
                 profile: profile,
                 emptyDirectory: emptyDirectory,
@@ -136,6 +140,77 @@ public final class SyncEngine {
         )
         onLog?(summary(for: status))
         return status
+    }
+
+    /// Welche Repos auf beiden Seiten auf denselben Zeigern stehen.
+    ///
+    /// git packt von sich aus um, nach jedem `fetch` und nach genug Commits.
+    /// Danach haben beide Rechner dieselben Commits in verschieden benannten
+    /// Packdateien, und ein Vergleich Datei fuer Datei haelt das fuer
+    /// beidseitige Arbeit. Deshalb kommen hier `HEAD`, `packed-refs` und alles
+    /// unter `refs/` von der Gegenseite herueber, ein paar Kilobyte je Repo,
+    /// und verglichen wird daran.
+    ///
+    /// Geht das schief, ist das kein Grund abzubrechen: dann bleibt es beim
+    /// Vergleich ueber die Dateien, so wie vorher.
+    private func settledBranches(
+        profile: Profile,
+        remote: SideInventory,
+        local: SideInventory,
+        context: RunContext,
+        rsyncPath: String,
+        onLog: ((String) -> Void)?
+    ) async throws -> Set<String> {
+        let bare = GitRepositories.bareBranches(remote: remote, local: local)
+        let branches = Set(
+            remote.paths.union(local.paths).compactMap { GitRepositories.branch(of: $0, bare: bare) }
+        )
+        guard !branches.isEmpty else { return [] }
+
+        guard
+            let filterFile = try? RsyncArguments.writeRefFilterFile(
+                branches: branches.sorted(), in: context.directory
+            )
+        else { return [] }
+        let harvest = context.directory.appendingPathComponent("refs", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: harvest, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? FileManager.default.removeItem(at: harvest) }
+
+        let plan = RsyncPlan(
+            executable: rsyncPath,
+            arguments: RsyncArguments.refArguments(
+                profile: profile,
+                filterFile: filterFile,
+                destination: harvest.path,
+                remoteShell: context.remoteShell,
+                flavour: context.flavour,
+                endpoints: context.endpoints
+            ),
+            environment: context.environment
+        )
+        onLog?("$ \(plan.displayCommand)")
+        let outcome = try await runner.execute(plan, onLine: nil)
+        guard outcome.succeeded || outcome.isWarningOnly else {
+            onLog?("Die Zeiger der Repos ließen sich nicht lesen, verglichen wird über die Dateien.")
+            return []
+        }
+
+        var settled: Set<String> = []
+        for branch in branches {
+            let here = GitRefs.read(
+                gitDirectory: (profile.localRoot as NSString).appendingPathComponent(branch)
+            )
+            let there = GitRefs.read(
+                gitDirectory: harvest.appendingPathComponent(branch).path
+            )
+            if GitRefs.settled(here, there) { settled.insert(branch) }
+        }
+        if !settled.isEmpty {
+            onLog?("\(settled.count) Repo(s) stehen beidseitig auf denselben Zeigern.")
+        }
+        return settled
     }
 
     /// Was lokal liegt, die Ausschlussliste aber verdeckt.

@@ -78,6 +78,18 @@ public struct GitRepoResult: Sendable, Identifiable {
     /// Haengt das Repo nach diesem Lauf immer noch hinter seiner Gegenstelle?
     public var stillBehind: Bool { behind > 0 && !action.changedSomething }
 
+    /// Steht das Repo hier nachweislich auf dem Stand seiner Gegenstelle?
+    ///
+    /// Nur dann taugt es als Schiedsrichter fuer einen Gleichstand zwischen
+    /// Rechner und Sync-Ziel. `pushPending` reicht bewusst nicht: dort liegen
+    /// Commits, die noch nirgends sonst liegen.
+    public var matchesRemote: Bool {
+        switch action {
+        case .upToDate, .fastForwarded: return true
+        case .pushPending, .skipped, .failed: return false
+        }
+    }
+
     /// Ein Satz fuer das Statusfenster.
     public var summary: String {
         switch action {

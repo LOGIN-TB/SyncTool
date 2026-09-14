@@ -27,13 +27,31 @@ unterhalb eines vollständigen Segments `.git/` liegt, gehört zum Repo darüber
 - **Blanke Repos** (`spiegel.git/` mit `HEAD` und `objects/` direkt darin)
   werden an diesen beiden Einträgen erkannt.
 
-## Drei Zustände
+## Verglichen werden die Zeiger, nicht die Dateien
+
+git packt von sich aus um, nach jedem `fetch` und nach genug Commits. Danach
+haben beide Rechner dieselben Commits in verschieden benannten Packdateien.
+Ein Vergleich Datei für Datei hält das für beidseitige Arbeit, und das Repo
+gälte als auseinandergelaufen, obwohl sich nichts geändert hat. Weil git das
+von allein tut, wäre das kein Sonderfall, sondern der Normalzustand.
+
+Deshalb holt der Prüflauf `HEAD`, `packed-refs` und alles unter `refs/` auch von
+der Gegenseite, ein paar Kilobyte je Repo, und vergleicht daran. Stehen beide
+Seiten auf denselben Zeigern, ist das Repo dasselbe. Es gibt dann nichts zu
+tun, und sein `.git` bleibt auch vom Hauptlauf ausgenommen: die frisch
+gepackten Dateien jedes Mal über die Leitung zu schicken brächte nichts.
+
+Lässt sich die Gegenseite nicht lesen, bleibt es beim Vergleich über die
+Dateien, so wie vorher.
+
+## Vier Zustände
 
 Nach dem Prüfen steht je Repo eine Zeile im Statusfenster statt tausender
 `.git`-Pfade:
 
 | Zustand | heißt |
 | --- | --- |
+| gleicher Stand | dieselben Zeiger auf beiden Seiten, nichts zu tun |
 | vom Server holen | nur die Gegenseite hat seit dem letzten Abgleich in `.git` geschrieben |
 | zum Server schicken | nur dieser Rechner hat geschrieben |
 | läuft auseinander | beide |
@@ -43,6 +61,21 @@ Rechner räumt lose Objekte weg, und das ist eine Änderung wie jede andere.
 
 Läuft ein Repo auseinander, bleibt es in diesem Lauf **unberührt**. Ein halb
 übertragenes `.git` ist schlimmer als ein veraltetes.
+
+## Wer einen Gleichstand aufbricht
+
+Bleibt es dabei, dass beide Seiten geschrieben haben, kann der Abgleich allein
+nicht entscheiden. Die Gegenstelle kann es: steht das Repo hier auf ihrem Stand
+und ist die Arbeitskopie sauber, ist die Frage beantwortet. Diese Seite gewinnt,
+und „Hochladen" nimmt das Repo mit.
+
+Verloren geht dabei nichts Einmaliges. Was hier liegt, liegt auch auf der
+Gegenstelle, und was nur auf dem Sync-Ziel lag, liegt weiterhin auf dem Rechner,
+der es dort hochgeladen hat. Liegen hier dagegen Commits, die noch nirgends
+sonst liegen, taugt das nicht als Urteil, und das Repo bleibt liegen.
+
+Ohne einen Lauf gegen die Gegenstelle wird nichts aufgebrochen. Bis dahin bleibt
+„läuft auseinander" stehen.
 
 ## Zwei rsync-Läufe
 
@@ -79,8 +112,18 @@ Stammordner durch:
 2. Steht der Zweig zurück, ist nichts eigenes dazugekommen und ist die
    Arbeitskopie sauber: sichern, dann `git merge --ff-only`.
 3. Alles andere wird gemeldet, nicht geraten. Kein Upstream, abgelöster HEAD,
-   ein offener Merge oder Rebase, eine schmutzige Arbeitskopie, eigene Commits
+   ein offener Merge oder Rebase, geänderte versionierte Dateien, eigene Commits
    auf beiden Seiten.
+
+Unversionierte Dateien halten den Vorspulschritt **nicht** auf. Wer in einem
+Entwicklungsordner arbeitet, hat fast immer welche herumliegen, und mit ihnen
+als Hinderungsgrund liefe dieser Schritt so gut wie nie. Das Netz darunter
+bleibt: würde ein ankommender Commit eine davon überschreiben, verweigert
+`git merge --ff-only` von sich aus, und der Grund steht in der Zeile des Repos.
+
+Im Statusfenster steht jedes Repo, das eine Handlung oder eine Erklärung
+braucht, auch eines, das zum Sync-Ziel passt und trotzdem hinter seiner
+Gegenstelle hängt. Was auf Stand ist, bleibt draußen.
 
 Gepusht wird nie. Liegen hier Commits, die noch nirgends sonst liegen, steht das
 in der Zeile des Repos, und der `git push` bleibt eine Handbewegung.

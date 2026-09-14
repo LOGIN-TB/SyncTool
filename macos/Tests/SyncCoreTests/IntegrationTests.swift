@@ -1196,6 +1196,76 @@ struct TwoMachinesGitTests {
         #expect(archive.lastPathComponent.hasPrefix("Projekt-bak-"))
     }
 
+    /// Der gemeldete Fall aus dem Statusfenster: "laeuft auseinander", beide
+    /// Knoepfe grau, und in der App kein Weg weiter. Ursache war nicht
+    /// beidseitige Arbeit, sondern beidseitiges Umpacken.
+    @Test("Beidseitiges Umpacken ist kein Auseinanderlaufen")
+    func repackingIsNotDivergence() async throws {
+        let bench = try makeBench()
+        defer { try? FileManager.default.removeItem(at: bench.base) }
+        let repositoryA = bench.machineA.appendingPathComponent("Projekt")
+        let repositoryB = bench.machineB.appendingPathComponent("Projekt")
+
+        let profileA = profile(root: bench.machineA, box: bench.box, backup: bench.backup)
+        let profileB = profile(root: bench.machineB, box: bench.box, backup: bench.backup)
+        let engineB = engine(support: bench.supportB, base: bench.base)
+
+        try commit("eins", in: repositoryA)
+        try commit("zwei", in: repositoryA)
+        try await sync(engine(support: bench.supportA, base: bench.base), profileA, .push)
+        try await sync(engineB, profileB, .pull)
+        try age(bench.base)
+
+        // Beide Rechner packen unabhaengig um. git tut das von sich aus, nach
+        // jedem fetch und nach genug Commits.
+        try git(["gc", "--prune=now"], in: repositoryB)
+        #expect(
+            try gitOutput(["rev-parse", "HEAD"], in: repositoryB)
+                == (try gitOutput(["rev-parse", "HEAD"], in: repositoryA))
+        )
+
+        let status = try await engineB.check(
+            profile: profileB, password: nil, rsyncPath: TestRsync.systemRsync,
+            supportsChecksumField: false
+        )
+        // Dieselben Zeiger auf beiden Seiten, also gibt es nichts zu tun.
+        #expect(status.gitUnits.map(\.state) == [.settled])
+        #expect(status.isInSync)
+        #expect(status.itemCount(for: .pull) == 0)
+        #expect(status.itemCount(for: .push) == 0)
+
+        // Und der Zweig bleibt vom Hauptlauf ausgenommen: sonst wanderten die
+        // frisch gepackten Dateien bei jedem Lauf ueber die Leitung.
+        #expect(status.frozenBranches(for: .push) == ["Projekt/.git/"])
+    }
+
+    @Test("Ein bewegter Zweig bleibt ein Fall für die Übertragung")
+    func movedBranchIsStillWork() async throws {
+        let bench = try makeBench()
+        defer { try? FileManager.default.removeItem(at: bench.base) }
+        let repositoryA = bench.machineA.appendingPathComponent("Projekt")
+
+        let profileA = profile(root: bench.machineA, box: bench.box, backup: bench.backup)
+        let profileB = profile(root: bench.machineB, box: bench.box, backup: bench.backup)
+        let engineB = engine(support: bench.supportB, base: bench.base)
+
+        try commit("eins", in: repositoryA)
+        try await sync(engine(support: bench.supportA, base: bench.base), profileA, .push)
+        try await sync(engineB, profileB, .pull)
+        try age(bench.base)
+
+        try commit("zwei", in: repositoryA)
+        try await sync(engine(support: bench.supportA, base: bench.base), profileA, .push)
+        try age(bench.base)
+
+        let status = try await engineB.check(
+            profile: profileB, password: nil, rsyncPath: TestRsync.systemRsync,
+            supportsChecksumField: false
+        )
+        #expect(status.gitUnits.map(\.state) == [.incoming])
+        #expect(!status.isInSync)
+    }
+
     @Test("Eigene Commits auf beiden Seiten bleiben liegen, nichts geht verloren")
     func divergedRepositoryIsLeftAlone() async throws {
         let bench = try makeBench()

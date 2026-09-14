@@ -112,7 +112,10 @@ public struct SyncStatus: Sendable {
 
     public var isInSync: Bool {
         incoming.isEmpty && outgoing.isEmpty && conflicts.isEmpty
-            && deletionsOnPull.isEmpty && deletionsOnPush.isEmpty && gitUnits.isEmpty
+            && deletionsOnPull.isEmpty && deletionsOnPush.isEmpty
+            // Ein Repo auf gleichem Stand ist kein Unterschied. Die Dateien
+            // darunter weichen ab, das Repo ist dasselbe.
+            && gitUnits.allSatisfy { $0.state == .settled }
     }
 
     /// Die Einheiten, die in dieser Richtung ueber die Leitung gehen.
@@ -126,6 +129,25 @@ public struct SyncStatus: Sendable {
     public func frozenBranches(for direction: SyncDirection) -> [String] {
         let mirrored = Set(gitUnits(for: direction).map(\.branch))
         return gitUnits.map(\.branch).filter { !mirrored.contains($0) }
+    }
+
+    /// Derselbe Pruefstand, nachdem die Gegenstelle einen Gleichstand
+    /// aufgebrochen hat. Ohne Ergebnisse von dort bleibt alles, wie es ist.
+    public func resolvingGitUnits(with results: [String: GitRepoResult]) -> SyncStatus {
+        guard !results.isEmpty else { return self }
+        return SyncStatus(
+            checkedAt: checkedAt,
+            lastSync: lastSync,
+            incoming: incoming,
+            outgoing: outgoing,
+            deletionsOnPull: deletionsOnPull,
+            deletionsOnPush: deletionsOnPush,
+            conflicts: conflicts,
+            gitUnits: gitUnits.map { $0.resolved(with: results[$0.root]) },
+            report: report,
+            remotePaths: remotePaths,
+            localPaths: localPaths
+        )
     }
 
     public var incomingBytes: Int64 {
@@ -194,6 +216,8 @@ public enum DriftResolver {
         local: SideInventory,
         lastSync: Date?,
         knownPaths: Set<String>? = nil,
+        /// Repos, deren Zeiger auf beiden Seiten uebereinstimmen.
+        settledGitBranches: Set<String> = [],
         excludedPaths: [String] = [],
         checkedAt: Date = Date()
     ) -> SyncStatus {
@@ -266,7 +290,8 @@ public enum DriftResolver {
             conflicts: conflicts,
             deletionsOnPull: deletionsOnPull,
             deletionsOnPush: deletionsOnPush,
-            bare: GitRepositories.bareBranches(remote: remote, local: local)
+            bare: GitRepositories.bareBranches(remote: remote, local: local),
+            settled: settledGitBranches
         )
 
         return SyncStatus(

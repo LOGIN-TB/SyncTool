@@ -55,7 +55,15 @@ Seite, die geräumt hat.
 
 Beide, also läuft das Repo auseinander und bleibt in diesem Lauf unberührt. Nur
 eine, also geht es als Ganzes in diese Richtung. Keine, also gibt es nichts zu
-tun. Siehe [git.md](git.md).
+tun.
+
+Davor steht allerdings noch eine Frage, und die entscheidet vorweg: stehen beide
+Seiten auf denselben Zeigern? Dafür holt der Prüflauf `HEAD`, `packed-refs` und
+alles unter `refs/` auch von der Gegenseite. Stimmen sie überein, ist das Repo
+dasselbe, egal wie verschieden die Packdateien darunter heißen, und es gibt
+nichts zu tun. Ohne diese Frage gälte jedes beidseitige Umpacken als
+Auseinanderlaufen, und weil git von sich aus umpackt, wäre das der Normalfall.
+Siehe [git.md](git.md).
 
 Die Bestandsliste folgt dem: ein ausgelassener Zweig behält den gemessenen
 gemeinsamen Bestand, ein übertragener folgt der Quellseite, unabhängig vom Haken

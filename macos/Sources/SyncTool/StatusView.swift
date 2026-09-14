@@ -167,7 +167,7 @@ struct StatusView: View {
             }
         } else if let backup = state.lastBackup {
             backupResult(backup)
-        } else if let status = state.status {
+        } else if let status = state.resolvedStatus {
             result(for: status)
         } else if state.selectedProfile == nil {
             VStack(alignment: .leading, spacing: 4) {
@@ -284,7 +284,7 @@ struct StatusView: View {
         if status.isInSync { return "Alles auf gleichem Stand" }
         let offen = status.incoming.count + status.outgoing.count
             + status.deletionsOnPull.count + status.deletionsOnPush.count
-            + status.gitUnits.count
+            + status.gitUnits.count { $0.state != .settled }
         return Format.count(offen, singular: "Unterschied", plural: "Unterschiede")
     }
 
@@ -797,7 +797,10 @@ private struct GitSection: View {
     /// Sync-Ziel passt und auf dem Stand seiner Gegenstelle steht, gehoert
     /// nicht in eine Liste, in der nichts zu tun ist.
     private var rows: [Row] {
-        let byRoot = Dictionary(units.map { ($0.root, $0) }, uniquingKeysWith: { first, _ in first })
+        let byRoot = Dictionary(
+            units.filter { $0.state != .settled }.map { ($0.root, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         let roots = Set(byRoot.keys).union(results.filter(\.value.needsAttention).keys)
         return roots.sorted().map { Row(root: $0, unit: byRoot[$0], result: results[$0]) }
     }

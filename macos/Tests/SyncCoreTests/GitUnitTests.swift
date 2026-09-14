@@ -23,10 +23,12 @@ struct GitUnitTests {
         remote: [InventoryEntry] = [],
         local: [InventoryEntry] = [],
         lastSync: Date? = nil,
-        knownPaths: Set<String>? = nil
+        knownPaths: Set<String>? = nil,
+        settled: Set<String> = []
     ) -> SyncStatus {
         DriftResolver.resolve(
-            remote: side(remote), local: side(local), lastSync: lastSync, knownPaths: knownPaths
+            remote: side(remote), local: side(local), lastSync: lastSync,
+            knownPaths: knownPaths, settledGitBranches: settled
         )
     }
 
@@ -221,6 +223,86 @@ struct GitUnitTests {
         #expect(unit.bytes == 4096)
         #expect(status.incomingBytes == 4096)
         #expect(status.outgoingBytes == 0)
+    }
+
+    // MARK: - Gleicher Stand und Schiedsrichter
+
+    @Test("Gleiche Zeiger heißt gleicher Stand, auch wenn die Dateien abweichen")
+    func settledBranchProducesNoWork() {
+        // Genau der gemeldete Fall: beide Seiten haben unabhaengig umgepackt.
+        let status = DriftResolver.resolve(
+            remote: side([entry("P/.git/objects/pack/pack-a.pack", size: 900)]),
+            local: side([entry("P/.git/objects/pack/pack-b.pack", size: 900)]),
+            lastSync: nil,
+            settledGitBranches: ["P/.git/"]
+        )
+        #expect(status.gitUnits.map(\.state) == [.settled])
+        #expect(status.incoming.isEmpty)
+        #expect(status.outgoing.isEmpty)
+        // Nichts zu tun, und die Knöpfe bleiben deshalb zu Recht grau.
+        #expect(status.isInSync)
+        #expect(status.itemCount(for: .pull) == 0)
+        #expect(status.itemCount(for: .push) == 0)
+    }
+
+    @Test("Ein gleichstehendes Repo bleibt trotzdem vom Hauptlauf ausgenommen")
+    func settledBranchIsStillFrozen() {
+        // Sonst wanderten die Packdateien bei jedem Lauf über die Leitung.
+        let status = DriftResolver.resolve(
+            remote: side([entry("P/.git/objects/pack/pack-a.pack")]),
+            local: side([entry("P/.git/objects/pack/pack-b.pack")]),
+            lastSync: nil,
+            settledGitBranches: ["P/.git/"]
+        )
+        #expect(status.frozenBranches(for: .pull) == ["P/.git/"])
+        #expect(status.frozenBranches(for: .push) == ["P/.git/"])
+    }
+
+    @Test("Steht das Repo hier auf dem Stand der Gegenstelle, gewinnt diese Seite")
+    func remoteStateBreaksTheTie() {
+        let status = resolve(
+            remote: [entry("P/.git/refs/heads/main", offset: 600)],
+            local: [entry("P/.git/refs/heads/main"), entry("P/.git/logs/HEAD", offset: 600)]
+        )
+        #expect(status.gitUnits.map(\.state) == [.conflict])
+
+        let level = GitRepoResult(root: "P/", branch: "main", action: .upToDate)
+        let resolved = status.resolvingGitUnits(with: ["P/": level])
+        #expect(resolved.gitUnits.map(\.state) == [.outgoing])
+        #expect(resolved.itemCount(for: .push) > 0)
+    }
+
+    @Test("Ohne Urteil der Gegenstelle bleibt der Gleichstand stehen")
+    func withoutAVerdictNothingIsResolved() {
+        let status = resolve(
+            remote: [entry("P/.git/refs/heads/main", offset: 600)],
+            local: [entry("P/.git/refs/heads/main"), entry("P/.git/logs/HEAD", offset: 600)]
+        )
+        #expect(status.resolvingGitUnits(with: [:]).gitUnits.map(\.state) == [.conflict])
+
+        // Eigene Commits, die noch nirgends liegen, taugen nicht als Urteil.
+        let ahead = GitRepoResult(
+            root: "P/", branch: "main", ahead: 2, action: .pushPending(commits: 2)
+        )
+        #expect(
+            status.resolvingGitUnits(with: ["P/": ahead]).gitUnits.map(\.state) == [.conflict]
+        )
+
+        // Ausgelassen heißt: es ist gar nicht geprüft worden.
+        let skipped = GitRepoResult(
+            root: "P/", branch: "main", action: .skipped(.dirtyWorktree)
+        )
+        #expect(
+            status.resolvingGitUnits(with: ["P/": skipped]).gitUnits.map(\.state) == [.conflict]
+        )
+    }
+
+    @Test("Eine Richtung, die schon feststeht, wird nicht umgebogen")
+    func aClearDirectionIsLeftAlone() {
+        let status = resolve(remote: [entry("P/.git/HEAD")])
+        #expect(status.gitUnits.map(\.state) == [.incoming])
+        let level = GitRepoResult(root: "P/", branch: "main", action: .upToDate)
+        #expect(status.resolvingGitUnits(with: ["P/": level]).gitUnits.map(\.state) == [.incoming])
     }
 
     @Test("Eine offene Einheit heisst: nicht auf gleichem Stand")

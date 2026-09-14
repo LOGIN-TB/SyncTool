@@ -56,6 +56,13 @@ final class AppState: ObservableObject {
     @Published var gitInfo: GitInfo?
     /// Ergebnis des letzten Abgleichs mit der Gegenstelle, je Repo-Stamm.
     @Published var gitResults: [String: GitRepoResult] = [:]
+
+    /// Der Pruefstand, nachdem die Gegenstelle einen Gleichstand aufgebrochen
+    /// hat. Ueberall zu benutzen, wo es um Knoepfe und Uebertragung geht:
+    /// `status` allein weiss nichts von der Gegenstelle.
+    var resolvedStatus: SyncStatus? {
+        status?.resolvingGitUnits(with: gitResults)
+    }
     @Published var hostKeyCandidates: [HostKeyCandidate] = []
     @Published var notice: String?
     @Published var lastBackup: BackupResult?
@@ -556,11 +563,14 @@ final class AppState: ObservableObject {
 
     func transfer(_ direction: SyncDirection, includeDeletes: Bool) async {
         guard let profile = selectedProfile, let rsync = rsyncInfo else { return }
-        let expected = status?.itemCount(for: direction) ?? 0
+        // Bewusst der aufgeloeste Stand: `status` allein weiss nichts davon,
+        // dass die Gegenstelle einen Gleichstand schon entschieden hat.
+        let current = resolvedStatus
+        let expected = current?.itemCount(for: direction) ?? 0
         // Was auf der Empfaengerseite neu ist, darf --delete nicht wegraeumen.
         let protectedPaths =
             direction == .pull
-            ? (status?.protectedOnPull ?? []) : (status?.protectedOnPush ?? [])
+            ? (current?.protectedOnPull ?? []) : (current?.protectedOnPush ?? [])
 
         // Ein Prozess arbeitet gleich mit dem Profil; ungespeicherte
         // Aenderungen daran waeren eine Falle.
@@ -579,9 +589,9 @@ final class AppState: ObservableObject {
                 includeDeletes: includeDeletes,
                 protectedPaths: includeDeletes ? protectedPaths : [],
                 expectedItems: expected,
-                gitUnits: status?.gitUnits ?? [],
-                remotePaths: status?.remotePaths ?? [],
-                localPaths: status?.localPaths ?? [],
+                gitUnits: current?.gitUnits ?? [],
+                remotePaths: current?.remotePaths ?? [],
+                localPaths: current?.localPaths ?? [],
                 rsyncPath: rsync.path,
                 onLog: { [weak self] line in
                     Task { @MainActor in self?.append(line) }
