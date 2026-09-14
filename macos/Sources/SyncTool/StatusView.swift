@@ -587,19 +587,38 @@ private struct InventoryBalance: View {
             || report.remoteDirectories != report.localDirectories
     }
 
+    /// Orange nur, wenn der Unterschied offen ist. Liegt er ganz in Repos auf
+    /// gleichem Stand, ist er erklaert, und ein Warnton daneben widerspraeche
+    /// dem gruenen Haken darueber.
+    private var unexplained: Bool { report.differsBeyondSettled }
+
     var body: some View {
         VStack(spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
                 side(remoteLabel, report.remoteFiles, report.remoteDirectories, report.remoteBytes)
                 Image(systemName: differs ? "notequal" : "equal")
                     .font(.caption)
-                    .foregroundStyle(differs ? Color.orange : Color.secondary.opacity(0.6))
+                    .foregroundStyle(unexplained ? Color.orange : Color.secondary.opacity(0.6))
                     .padding(.top, 18)
                 side("Lokal", report.localFiles, report.localDirectories, report.localBytes)
             }
 
+            if differs && !unexplained && report.settledRepositories > 0 { settledNote }
             if report.excludedCount > 0 { excluded }
         }
+    }
+
+    /// Die Antwort auf "warum steht da ein Haken und trotzdem ein Ungleich".
+    private var settledNote: some View {
+        Text(
+            "Die \(Format.number(report.difference)) Einträge Unterschied liegen in Repos, "
+                + "die auf beiden Seiten auf demselben Stand stehen: dieselben Commits, "
+                + "anders gepackt. Übertragen wird da nichts."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func side(_ title: String, _ files: Int, _ directories: Int, _ bytes: Int64) -> some View {
@@ -611,7 +630,7 @@ private struct InventoryBalance: View {
             // Aktualisierung, und zwei Werte lassen sich nicht vergleichen.
             Text(Format.number(files))
                 .font(.title3.weight(.semibold).monospacedDigit())
-                .foregroundStyle(differs ? Color.orange : .primary)
+                .foregroundStyle(unexplained ? Color.orange : .primary)
             Text("\(Format.number(directories)) Ordner · \(Format.bytes(bytes))")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)

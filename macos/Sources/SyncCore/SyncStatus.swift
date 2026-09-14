@@ -304,7 +304,8 @@ public enum DriftResolver {
             conflicts: folded.conflicts,
             gitUnits: folded.units,
             report: InventoryReport(
-                remote: remote, local: local, excludedPaths: excludedPaths
+                remote: remote, local: local, excludedPaths: excludedPaths,
+                settledBranches: settledGitBranches
             ),
             remotePaths: remote.paths,
             localPaths: local.paths

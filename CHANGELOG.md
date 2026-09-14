@@ -37,6 +37,10 @@
   auch wenn ein Repo zurückhing und nur ausgelassen werden musste.
 - Das Statusfenster zeigt auch Repos, die zum Sync-Ziel passen und trotzdem
   hinter ihrer Gegenstelle hängen. Die standen vorher nirgends.
+- Der grüne Haken und die Bestandszahlen widersprechen sich nicht mehr. Die
+  Summen zählen weiter roh, damit sie sich gegen einen FTP-Client halten lassen;
+  liegt der Unterschied ganz in Repos auf gleichem Stand, steht das jetzt
+  darunter und die Zahl bleibt ruhig. Bleibt ein Rest offen, wird sie orange.
 
 Siehe [docs/git.md](docs/git.md).
 

@@ -258,6 +258,49 @@ struct GitUnitTests {
         #expect(status.frozenBranches(for: .push) == ["P/.git/"])
     }
 
+    @Test("Der Haken und der Unterschied in den Zahlen passen zusammen")
+    func balanceExplainsTheGap() {
+        // Der gemeldete Widerspruch: gruener Haken oben, unterschiedliche
+        // Summen darunter. Die Summen zaehlen roh, damit sie sich gegen einen
+        // FTP-Client halten lassen, und ein gleichstehendes Repo faellt darin
+        // trotzdem auf, weil seine Packdateien anders heissen.
+        let status = DriftResolver.resolve(
+            remote: side([
+                entry("P/.git/objects/pack/pack-a.pack"),
+                entry("P/.git/objects/pack/pack-a.idx"),
+                entry("gemeinsam.txt"),
+            ]),
+            local: side([
+                entry("P/.git/objects/pack/pack-b.pack"),
+                entry("gemeinsam.txt"),
+            ]),
+            lastSync: nil,
+            settledGitBranches: ["P/.git/"]
+        )
+        #expect(status.isInSync)
+        #expect(status.report.difference == 1)
+        #expect(status.report.settledRemote == 2)
+        #expect(status.report.settledLocal == 1)
+        #expect(status.report.settledRepositories == 1)
+        // Herausgerechnet gehen die Zahlen auf, der Unterschied ist erklärt.
+        #expect(!status.report.differsBeyondSettled)
+    }
+
+    @Test("Ein Unterschied ausserhalb der Repos bleibt offen")
+    func balanceKeepsUnexplainedGapsOpen() {
+        let status = DriftResolver.resolve(
+            remote: side([
+                entry("P/.git/objects/pack/pack-a.pack"),
+                entry("nur-dort.txt"),
+            ]),
+            local: side([entry("P/.git/objects/pack/pack-b.pack")]),
+            lastSync: nil,
+            settledGitBranches: ["P/.git/"]
+        )
+        #expect(status.report.differsBeyondSettled)
+        #expect(!status.isInSync)
+    }
+
     @Test("Steht das Repo hier auf dem Stand der Gegenstelle, gewinnt diese Seite")
     func remoteStateBreaksTheTie() {
         let status = resolve(

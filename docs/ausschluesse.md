@@ -38,6 +38,17 @@ Wer wirklich alles abgleichen will, leert die Liste in den Einstellungen unter
 „Abgleich". Die Liste gehört zum Profil, zwei Profile können verschiedene
 Ausschlüsse haben.
 
+## Warum die Zahlen auseinandergehen können, obwohl alles stimmt
+
+Die beiden Summen unter dem Ergebnis zählen roh, genau dafür sind sie da: sie
+sollen sich gegen einen FTP-Client halten lassen. Ein Repo, dessen Zeiger auf
+beiden Seiten übereinstimmen, wird trotzdem nicht übertragen, und seine
+verschieden benannten Packdateien treiben die Summen auseinander.
+
+Steht darüber der grüne Haken und darunter ein Unterschied, sagt eine Zeile
+dazwischen, dass er ganz in solchen Repos liegt. Bleibt ein Rest offen, wird die
+Zahl orange. Siehe [git.md](git.md).
+
 ## Für das Backup gilt sie nicht
 
 Das Backup packt den ganzen Stammordner, einschließlich `node_modules` und

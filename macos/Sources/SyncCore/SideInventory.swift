@@ -128,6 +128,16 @@ public struct InventoryReport: Sendable {
     public let localBytes: Int64
     /// Lokal vorhanden, aber wegen der Ausschlussliste nie betrachtet.
     public let excluded: [ExcludedBranch]
+    /// Eintraege je Seite, die in einem Repo auf gleichem Stand liegen.
+    ///
+    /// Die Zahlen oben sind roh gezaehlt, damit sie sich gegen einen FTP-Client
+    /// halten lassen. Ein Repo, dessen Zeiger beidseitig uebereinstimmen, wird
+    /// trotzdem nicht uebertragen, und seine verschieden benannten Packdateien
+    /// treiben die beiden Summen auseinander. Ohne diese Zahl stuende dort ein
+    /// Unterschied ohne Erklaerung.
+    public let settledRemote: Int
+    public let settledLocal: Int
+    public let settledRepositories: Int
 
     public init(
         remoteFiles: Int = 0,
@@ -136,7 +146,10 @@ public struct InventoryReport: Sendable {
         localFiles: Int = 0,
         localDirectories: Int = 0,
         localBytes: Int64 = 0,
-        excluded: [ExcludedBranch] = []
+        excluded: [ExcludedBranch] = [],
+        settledRemote: Int = 0,
+        settledLocal: Int = 0,
+        settledRepositories: Int = 0
     ) {
         self.remoteFiles = remoteFiles
         self.remoteDirectories = remoteDirectories
@@ -145,9 +158,21 @@ public struct InventoryReport: Sendable {
         self.localDirectories = localDirectories
         self.localBytes = localBytes
         self.excluded = excluded
+        self.settledRemote = settledRemote
+        self.settledLocal = settledLocal
+        self.settledRepositories = settledRepositories
     }
 
-    public init(remote: SideInventory, local: SideInventory, excludedPaths: [String]) {
+    public init(
+        remote: SideInventory,
+        local: SideInventory,
+        excludedPaths: [String],
+        settledBranches: Set<String> = []
+    ) {
+        func inSettled(_ paths: Set<String>) -> Int {
+            guard !settledBranches.isEmpty else { return 0 }
+            return paths.count { path in settledBranches.contains { path.hasPrefix($0) } }
+        }
         self.init(
             remoteFiles: remote.fileCount,
             remoteDirectories: remote.directoryCount,
@@ -155,10 +180,25 @@ public struct InventoryReport: Sendable {
             localFiles: local.fileCount,
             localDirectories: local.directoryCount,
             localBytes: local.totalBytes,
-            excluded: ExcludedBranch.group(excludedPaths)
+            excluded: ExcludedBranch.group(excludedPaths),
+            settledRemote: inSettled(remote.paths),
+            settledLocal: inSettled(local.paths),
+            settledRepositories: settledBranches.count
         )
     }
 
     /// Alle ausgeschlossenen Eintraege, nicht nur die Zweige.
     public var excludedCount: Int { excluded.reduce(0) { $0 + $1.count } }
+
+    /// Wie weit die beiden Summen auseinanderliegen.
+    public var difference: Int {
+        abs((remoteFiles + remoteDirectories) - (localFiles + localDirectories))
+    }
+
+    /// Gehen die Zahlen auch dann noch auseinander, wenn man die Repos auf
+    /// gleichem Stand herausrechnet?
+    public var differsBeyondSettled: Bool {
+        (remoteFiles + remoteDirectories - settledRemote)
+            != (localFiles + localDirectories - settledLocal)
+    }
 }
