@@ -7,33 +7,40 @@ import SwiftUI
 /// Statusitem aus. Jede spaetere Hoehenaenderung kommt als `setFrame` mit
 /// stehender Unterkante an, und weil ein `NSWindow` seinen Ursprung unten links
 /// hat, wandert dabei die Oberkante nach oben. Ein Aufklappen der Repo-Liste
-/// verschiebt das Fenster so um mehrere hundert Punkt, und es haengt danach
-/// nicht mehr unter dem Symbol.
+/// verschiebt das Fenster so um mehrere hundert Punkt.
 ///
-/// Der Anker muss dafuer nicht am Statusitem gesucht werden, und das ist der
-/// Punkt: Ein Menueleisten-Fenster haengt immer unmittelbar unter der
-/// Menueleiste, und deren Unterkante ist `screen.visibleFrame.maxY`. Oeffentlich,
-/// ohne privaten Klassennamen und ohne Suche durch `NSApp.windows`.
+/// Der Anker ist die Oberkante, die SwiftUI beim Oeffnen selbst gewaehlt hat.
+/// Die ist richtig, sie stammt vom Statusitem; sie geht nur bei der naechsten
+/// Groessenaenderung verloren. Gemerkt wird sie deshalb bei jeder Bewegung, die
+/// nicht von uns kommt, und bei jeder Groessenaenderung wieder hergestellt.
 ///
-/// Der zusaetzliche Abstand, den SwiftUI laesst, wird beim Oeffnen einmal
-/// gemessen. Das Verfahren ist damit selbstheilend: Stimmt der gemerkte Abstand
-/// einmal nicht, ist der Fehler ein paar Punkte gross statt mehrere hundert,
-/// weil der Bezug bei jeder Korrektur frisch vom Bildschirm kommt.
+/// Der erste Anlauf rechnete stattdessen mit dem Abstand zur Menueleiste, und
+/// zwar gemessen in `viewDidMoveToWindow`. Zu dem Zeitpunkt hat SwiftUI das
+/// Fenster noch nicht gesetzt: Der Abstand war Unsinn, die erste Korrektur
+/// schob das Fenster an die falsche Stelle, und die naechste Messung nahm diese
+/// Stelle fuer bare Muenze. Deshalb hier kein Messen mehr vor der ersten echten
+/// Bewegung und kein Bezug auf den Bildschirm, wo einer auf das Fenster genuegt.
 ///
 /// Die Breite bleibt unberuehrt. Sie aendert sich nie (`StatusView` steht auf
 /// 460), also ist die waagerechte Lage nie in Gefahr.
 private final class AnchorView: NSView {
-    /// Abstand zwischen Menueleisten-Unterkante und Fensteroberkante, beim
-    /// Oeffnen gemessen. `nil` heisst: noch nie gesehen.
-    private var gap: CGFloat?
-    /// Sperrt den Wiedereintritt: Unser eigenes `setFrameOrigin` loest wieder
-    /// eine Benachrichtigung aus.
-    private var correcting = false
+    /// Die Oberkante, an der das Fenster haengen soll. `nil` heisst: SwiftUI
+    /// hat noch nicht positioniert, also gibt es nichts zu halten.
+    private var anchorTop: CGFloat?
+    /// Zaehlt die Korrekturen, die noch unterwegs sind.
+    ///
+    /// Bewusst ein Zaehler und kein Schalter: Die Korrektur laeuft asynchron,
+    /// und die Benachrichtigung ueber unsere eigene Bewegung trifft erst
+    /// danach ein. Ein Schalter, der synchron wieder zurueckfaellt, waere zu
+    /// dem Zeitpunkt schon offen, und wir haetten unsere eigene Bewegung fuer
+    /// die von SwiftUI gehalten.
+    private var pending = 0
     private var observers: [any NSObjectProtocol] = []
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         unsubscribe()
+        anchorTop = nil
         guard let window = self.window else { return }
         // Nur das rahmenlose Popover. Das Einstellungsfenster und das
         // Statusfenster der Bildschirmfoto-Werkstatt sind gewoehnliche Fenster
@@ -41,16 +48,15 @@ private final class AnchorView: NSView {
         // falschen Stelle gesetzt wird.
         guard !window.styleMask.contains(.titled) else { return }
 
-        measure(window)
         let center = NotificationCenter.default
         observers = [
             center.addObserver(
                 forName: NSWindow.didMoveNotification, object: window, queue: .main
             ) { [weak self] _ in
-                guard let self, !self.correcting else { return }
-                // Hat SwiftUI das Fenster selbst gesetzt, ist das der neue
-                // gueltige Abstand.
-                self.measure(window)
+                guard let self, self.pending == 0 else { return }
+                // SwiftUI hat das Fenster gesetzt. Das ist die Wahrheit ueber
+                // die Oberkante, und zwar die einzige, die wir bekommen.
+                self.anchorTop = window.frame.maxY
             },
             center.addObserver(
                 forName: NSWindow.didResizeNotification, object: window, queue: .main
@@ -67,28 +73,32 @@ private final class AnchorView: NSView {
         observers = []
     }
 
-    private func screen(for window: NSWindow) -> NSScreen? {
-        window.screen ?? NSScreen.main
-    }
-
-    private func measure(_ window: NSWindow) {
-        guard let screen = screen(for: window) else { return }
-        gap = screen.visibleFrame.maxY - window.frame.maxY
-    }
-
     private func realign(_ window: NSWindow) {
-        guard let gap, let screen = screen(for: window), !correcting else { return }
+        guard let anchorTop else { return }
         var origin = window.frame.origin
-        origin.y = screen.visibleFrame.maxY - gap - window.frame.height
+        origin.y = anchorTop - window.frame.height
         // Nach unten klemmen: `BoundedList` deckelt jede Liste einzeln, mehrere
         // aufgeklappte Abschnitte zusammen reichen aber unter den Bildschirm.
         // Lieber ein Fenster, das unten anstoesst, als eines, dessen Fussleiste
         // nicht mehr erreichbar ist.
-        origin.y = max(origin.y, screen.visibleFrame.minY)
+        if let screen = window.screen ?? NSScreen.main {
+            origin.y = max(origin.y, screen.visibleFrame.minY)
+        }
         guard abs(origin.y - window.frame.origin.y) > 0.5 else { return }
-        correcting = true
-        window.setFrameOrigin(origin)
-        correcting = false
+
+        // Nicht synchron aus dem Benachrichtigungs-Handler heraus: Der laeuft
+        // mitten in AppKits Groessenaenderung, waehrend SwiftUI sein Layout
+        // rechnet. Ein `setFrameOrigin` an dieser Stelle greift in einen Lauf
+        // ein, der noch nicht fertig ist. Eine Runde spaeter ist alles
+        // abgeschlossen, und die Verschiebung faellt niemandem auf.
+        pending += 1
+        DispatchQueue.main.async { [weak self] in
+            window.setFrameOrigin(origin)
+            // Erst danach freigeben, sonst haelt der `didMove`-Beobachter
+            // unsere eigene Bewegung fuer die von SwiftUI und merkt sich eine
+            // Oberkante, die wir gerade selbst gesetzt haben.
+            DispatchQueue.main.async { self?.pending -= 1 }
+        }
     }
 }
 

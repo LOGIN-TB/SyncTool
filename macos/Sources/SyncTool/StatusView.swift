@@ -678,9 +678,9 @@ private struct InventoryBalance: View {
     private var settledNote: some View {
         DisclosureGroup(isExpanded: $settledExpanded) {
             VStack(alignment: .leading, spacing: 4) {
-                BoundedList(count: report.settled.count, rowHeight: 16) {
+                BoundedList(count: report.settledContributors.count, rowHeight: 16) {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(report.settled.filter { $0.difference != 0 }) { repo in
+                        ForEach(report.settledContributors) { repo in
                             HStack(spacing: 6) {
                                 Text(repo.displayName)
                                     .font(.caption.monospaced())
@@ -714,7 +714,7 @@ private struct InventoryBalance: View {
             Text(
                 "\(Format.count(report.difference, singular: "Eintrag", plural: "Einträge")) "
                     + "Unterschied, alle in "
-                    + "\(Format.count(report.settledRepositories, singular: "Repo", plural: "Repos")) "
+                    + "\(Format.count(report.settledContributors.count, singular: "Repo", plural: "Repos")) "
                     + "auf gleichem Stand"
             )
             .font(.caption)

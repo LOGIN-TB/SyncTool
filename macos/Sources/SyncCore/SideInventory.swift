@@ -308,6 +308,16 @@ public struct InventoryReport: Sendable {
     /// Alle ausgeschlossenen Eintraege, nicht nur die Zweige.
     public var excludedCount: Int { excluded.reduce(0) { $0 + $1.count } }
 
+    /// Die Repos auf gleichem Stand, die tatsaechlich zur Differenz beitragen.
+    ///
+    /// Die meisten tun es nicht: Wer seit dem letzten Umpacken nichts getan
+    /// hat, hat beidseitig dieselben Dateien. "Alle 22 Repos" zu nennen, wenn
+    /// zwei davon gemeint sind, ist keine Erklaerung, sondern eine Zahl, die
+    /// zu nichts passt, was darunter steht.
+    public var settledContributors: [SettledRepository] {
+        settled.filter { $0.difference != 0 }
+    }
+
     public var settledRemote: Int { settled.reduce(0) { $0 + $1.remote } }
     public var settledLocal: Int { settled.reduce(0) { $0 + $1.local } }
     public var settledRepositories: Int { settled.count }

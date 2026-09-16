@@ -118,4 +118,40 @@ struct InventoryReportTests {
         #expect(!bericht.hasUnexplainedEntries)
         #expect(bericht.difference == 0)
     }
+
+    /// Die Anzeige nannte frueher alle gleichstehenden Repos, auch die ohne
+    /// Abweichung. Bei 22 Repos und zwei betroffenen stand dort "alle in 22
+    /// Repos", waehrend die Liste darunter zwei Zeilen zeigte. Eine Zahl, die
+    /// zu nichts passt, was daneben steht, ist schlimmer als keine.
+    @Test("Genannt werden nur die Repos, die zur Differenz beitragen")
+    func onlyContributingRepositoriesAreNamed() {
+        let bericht = report(
+            remote: [
+                "P/.git/", "P/.git/pack-1", "P/.git/pack-2",
+                "Q/.git/", "Q/.git/HEAD",
+                "R/.git/", "R/.git/HEAD",
+            ],
+            local: [
+                "P/.git/", "P/.git/alles",
+                "Q/.git/", "Q/.git/HEAD",
+                "R/.git/", "R/.git/HEAD",
+            ],
+            settled: ["P/.git/", "Q/.git/", "R/.git/"]
+        )
+        #expect(bericht.settledRepositories == 3)
+        #expect(bericht.settledContributors.map(\.branch) == ["P/.git/"])
+        #expect(bericht.settledContributors.reduce(0) { $0 + $1.difference } == bericht.difference)
+        #expect(!bericht.hasUnexplainedEntries)
+    }
+
+    @Test("Gehen die Zahlen auf, trägt kein Repo bei")
+    func nothingContributesWhenTheNumbersMatch() {
+        let bericht = report(
+            remote: ["P/.git/", "P/.git/HEAD"],
+            local: ["P/.git/", "P/.git/HEAD"],
+            settled: ["P/.git/"]
+        )
+        #expect(bericht.settledContributors.isEmpty)
+        #expect(bericht.difference == 0)
+    }
 }
