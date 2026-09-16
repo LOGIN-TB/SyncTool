@@ -160,7 +160,7 @@ public final class SyncEngine {
         // Rechnern wirklich fehlte, ist nichts, was man ausrechnen kann,
         // sondern dass nicht zwei gleichzeitig laufen. Dafuer gibt es die
         // Sperre in `transfer`.
-        let shared = await SharedState.decoded(
+        let shared = SharedState.decoded(
             (await remoteFiles(profile, session, context.endpoints)?
                 .read(SharedState.fileName)) ?? Data()
         )
@@ -698,7 +698,7 @@ public final class SyncEngine {
             // letzte Abgleich nicht verschwinden. Stuende dort danach nichts
             // mehr, waere die Konflikterkennung auf allen Rechnern blind, und
             // ein einziger abgebrochener Lauf haette das angerichtet.
-            let vorher = await SharedState.decoded(
+            let vorher = SharedState.decoded(
                 (await store.read(SharedState.fileName)) ?? Data()
             )
             let stand = SharedState(

@@ -431,7 +431,7 @@ final class AppState: ObservableObject {
         case .sshRsync:
             await testSSH(profile: profile, password: password)
         case .localFolder:
-            testFolder(profile: profile)
+            await testFolder(profile: profile)
         case .mountedVolume(let proto):
             // Das Einhaengen kommt erst noch. Bis dahin ein Satz statt eines
             // Fehlschlags mit unverstaendlicher Meldung.
@@ -447,7 +447,7 @@ final class AppState: ObservableObject {
 
     /// Ein lokales Ziel hat keine Verbindung. Geprueft wird, ob der Ordner da
     /// ist, ob sich darin schreiben laesst, und wie viel darin liegt.
-    private func testFolder(profile: Profile) {
+    private func testFolder(profile: Profile) async {
         if let problem = profile.targetFolderIssue() {
             settingsNotice = problem.message
             append("Fehlgeschlagen: \(problem.message)")
