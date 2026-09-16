@@ -48,6 +48,20 @@ public enum RsyncArguments {
         /// Profil: nach einem `git gc` faellt drueben ein Vielfaches von
         /// `maxDelete` weg, und der Lauf duerfte trotzdem nicht stehenbleiben.
         public var gitMaxDelete: Int
+        /// Notbremse des Hauptlaufs. `nil` heisst: es gab keine Messung, dann
+        /// gilt `profile.maxDelete` wie eh und je.
+        public var maxDelete: Int?
+        /// Wohin die Empfaengerseite legt, was sie ersetzt oder loescht.
+        /// Relativ zum Ziel, siehe `VersionFolder`. `nil` heisst: keine
+        /// Sicherungen, dann ist jedes Ueberschreiben endgueltig.
+        public var backupDir: String?
+        /// Vertraegt die laufende rsync-Fassung `-b` und `--delete` in
+        /// derselben Zeile? Bei openrsync nicht, siehe `backupFlags`.
+        public var supportsBackupWhileDeleting: Bool
+        /// Datei mit den Pfaden, die dieser Lauf uebertragen soll, einer je
+        /// Zeile und nullterminiert. `nil` heisst: keine Messung, dann geht der
+        /// ganze Baum wie frueher. Siehe `writeFilesFromFile`.
+        public var filesFromFile: String?
 
         public init(
             dryRun: Bool,
@@ -58,7 +72,11 @@ public enum RsyncArguments {
             endpoints: SyncEndpoints? = nil,
             flavour: RsyncFlavour = .sshRsync,
             gitFilterFile: String? = nil,
-            gitMaxDelete: Int = 0
+            gitMaxDelete: Int = 0,
+            maxDelete: Int? = nil,
+            backupDir: String? = nil,
+            supportsBackupWhileDeleting: Bool = true,
+            filesFromFile: String? = nil
         ) {
             self.dryRun = dryRun
             self.includeDeletes = includeDeletes
@@ -69,9 +87,58 @@ public enum RsyncArguments {
             self.flavour = flavour
             self.gitFilterFile = gitFilterFile
             self.gitMaxDelete = gitMaxDelete
+            self.maxDelete = maxDelete
+            self.backupDir = backupDir
+            self.supportsBackupWhileDeleting = supportsBackupWhileDeleting
+            self.filesFromFile = filesFromFile
+        }
+
+        /// Die zwei Flags, die aus jedem Ueberschreiben eine verschobene Datei
+        /// machen. Nur im echten Lauf: ein Trockenlauf schreibt nichts, und
+        /// die Flags stuenden dann nur im Protokoll herum.
+        ///
+        /// Und nicht zusammen mit `--delete`, solange openrsync laeuft. Diese
+        /// Fassung hoert in der Kombination still auf zu loeschen: kein
+        /// Abbruch, keine Meldung, Status 0, und die Empfaengerseite behaelt
+        /// Dateien, die der Nutzer im Ruecksprachefenster zum Loeschen
+        /// freigegeben hat. Gemessen mit `env -i PATH=/usr/bin:/bin`, also
+        /// openrsync gegen sich selbst; mit einem rsync 3.x im Pfad faellt es
+        /// nicht auf, weil openrsync dann jenes als Gegenstelle startet.
+        /// Belegt in den Integrationstests gegen beide Fassungen.
+        ///
+        /// Lieber loeschen ohne Sicherung als eine Sicherung, die das Loeschen
+        /// verschluckt: Ein Lauf, der sich anders verhaelt als angekuendigt,
+        /// ist der Anfang jedes Auseinanderlaufens.
+        func backupFlags(deleting: Bool) -> [String] {
+            guard !dryRun, let backupDir else { return [] }
+            if deleting && !supportsBackupWhileDeleting { return [] }
+            return ["-b", "--backup-dir=\(backupDir)"]
         }
     }
 
+    /// Der Lauf, der Inhalte uebertraegt.
+    ///
+    /// Mit `options.filesFromFile` geht genau die gemessene Menge hinueber und
+    /// sonst nichts. Das ist der Unterschied, um den es geht: Frueher war das
+    /// hier ein voller einseitiger rsync ueber den ganzen Baum, und der fasste
+    /// auch Dateien an, die die Pruefung der anderen Richtung zugeordnet
+    /// hatte. Wer "Hochladen" drueckte, ueberschrieb damit die neuere Fassung
+    /// der Gegenstelle mit der aelteren von hier, und jeder gemeldete Konflikt
+    /// wurde einseitig plattgemacht, obwohl direkt daneben stand, dass genau
+    /// das passiert.
+    ///
+    /// Konflikte stehen in keiner der beiden Listen und bleiben dadurch
+    /// unberuehrt, ohne dass es dafuer eine eigene Regel braucht.
+    ///
+    /// Ohne Liste verhaelt sich die Funktion wie frueher, damit ein Aufruf
+    /// ohne vorherige Pruefung gueltig bleibt.
+    ///
+    /// `--update` waere die billige Antwort gewesen und deckt den Fall nicht:
+    /// Es uebertraegt "gleiche Zeit, anderer Inhalt", also genau einen der
+    /// Konfliktfaelle. Bei beidseitiger Arbeit schickt es die juengere Fassung
+    /// und wirft die andere weg. Und geht die Uhr der Gegenstelle vor,
+    /// ueberspringt es beim Hochladen alles und meldet Erfolg. Ein stiller
+    /// Nichtlauf ist schlimmer als ein lauter Fehler.
     public static func arguments(
         profile: Profile,
         direction: SyncDirection,
@@ -92,6 +159,13 @@ public enum RsyncArguments {
         }
         if let excludeFile = options.excludeFile { args.append("--exclude-from=\(excludeFile)") }
 
+        // `--from0` dazu: Dann ist das Trennzeichen das Nullbyte, und die Namen
+        // stehen roh in der Datei. Kein Muster, kein Backslash, keine Frage,
+        // wie ein Zeilenumbruch im Dateinamen zu lesen waere.
+        if let filesFrom = options.filesFromFile {
+            args += ["--files-from=\(filesFrom)", "--from0"]
+        }
+
         // Ohne Gegenstelle kein `-e`. Ein lokaler Lauf braucht keine Shell,
         // und rsync wuerde die Angabe als Fehler auslegen.
         if options.flavour.usesRemoteShell { args += ["-e", options.remoteShell] }
@@ -103,13 +177,81 @@ public enum RsyncArguments {
         }
 
         // Loeschen laeuft nie beilaeufig mit: der Aufrufer muss es anfordern,
-        // und das Profil muss es erlauben.
-        if options.includeDeletes && profile.deleteAllowed {
+        // und das Profil muss es erlauben. Mit einer Pfadliste gar nicht mehr:
+        // Dieser Lauf sieht nur die genannten Pfade, ein `--delete` daneben
+        // haette keinen Bezug zum Rest des Baums. Geraeumt wird in
+        // `deleteArguments`.
+        let deleting = options.includeDeletes && profile.deleteAllowed
+            && options.filesFromFile == nil
+        args += options.backupFlags(deleting: deleting)
+
+        if deleting {
             args.append("--delete")
             // Bricht ab, statt mehr zu loeschen. Die Vorschau kommt aus den
             // Bestaenden, dieser Lauf hier ist immer der echte.
-            args.append("--max-delete=\(profile.maxDelete)")
+            args.append("--max-delete=\(options.maxDelete ?? profile.maxDelete)")
         }
+
+        let ends = options.endpoints ?? SyncEndpoints.resolve(profile: profile)
+        switch direction {
+        case .pull:
+            args += [ends.remote, ends.local]
+        case .push:
+            args += [ends.local, ends.remote]
+        }
+        return args
+    }
+
+    // MARK: - Löschlauf
+
+    /// Die Zeile fuer den Lauf, der nur aufraeumt.
+    ///
+    /// Getrennt vom Inhalt, weil die beiden Risiken verschieden sind: Der
+    /// Inhaltslauf schreibt, was die Pruefung benannt hat, dieser hier entfernt
+    /// Eintraege, die es auf der Senderseite nicht mehr gibt. In einem Lauf
+    /// zusammengefasst waeren sie nicht einzeln zu bewerten.
+    ///
+    /// `--existing --ignore-existing`: Dieser Lauf legt nichts an und ersetzt
+    /// nichts. Er raeumt nur. Damit kann er den vollen Baum sehen, ohne dass
+    /// eine Entscheidung des Inhaltslaufs noch einmal ueberschrieben wird.
+    ///
+    /// `--delete-after` statt des voreingestellten `--delete-during`: Bricht
+    /// der Lauf mittendrin ab, hat die Empfaengerseite noch alle Daten. Vorher
+    /// zu loeschen hiesse, im Abbruchfall Loecher zu hinterlassen.
+    ///
+    /// Die Reihenfolge im Motor ist Inhalt vor Loeschen. Eine umbenannte Datei
+    /// geht so erst unter dem neuen Namen hinueber und faellt danach unter dem
+    /// alten weg; zu keinem Zeitpunkt fehlt sie auf der Gegenseite.
+    public static func deleteArguments(
+        profile: Profile,
+        direction: SyncDirection,
+        options: Options
+    ) -> [String] {
+        var args = options.flavour.baseFlags
+        args += [
+            "--itemize-changes",
+            "--out-format=\(ItemizeParser.outFormat)",
+            "--modify-window=1",
+            "--existing",
+            "--ignore-existing",
+        ]
+
+        // Schutzregeln vor die Ausschluesse: bei rsync gewinnt die erste
+        // passende Regel.
+        if let protectFile = options.protectFile { args.append("--filter=merge \(protectFile)") }
+        if let excludeFile = options.excludeFile { args.append("--exclude-from=\(excludeFile)") }
+
+        if options.flavour.usesRemoteShell { args += ["-e", options.remoteShell] }
+
+        if options.dryRun {
+            args.append("--dry-run")
+        } else {
+            args.append("--stats")
+        }
+        args += options.backupFlags(deleting: true)
+
+        args += ["--delete", "--delete-after"]
+        args.append("--max-delete=\(options.maxDelete ?? profile.maxDelete)")
 
         let ends = options.endpoints ?? SyncEndpoints.resolve(profile: profile)
         switch direction {
@@ -131,6 +273,18 @@ public enum RsyncArguments {
     /// gespiegelt wird, hiesse `*.log` sonst, dass ein `.git/gc.log` der
     /// Empfaengerseite ueberlebt: Ausschluss ist bei rsync zugleich Schutz vor
     /// dem Loeschen. Heraus kaeme wieder ein halbes `.git`.
+    ///
+    /// Ohne `-b --backup-dir`. Geraeumt wird hier nur innerhalb eines `.git/`,
+    /// dessen Inhalt in diesem Moment vollstaendig auf der Senderseite liegt:
+    /// Was hier wegfaellt, ist wiederherstellbar, und eine Sicherung davon
+    /// waere keine Vorsicht, sondern Ballast. Nach jedem `git gc` wanderten
+    /// sonst die alten Packdateien mit, hunderte Megabyte je Lauf, und die
+    /// Gegenstelle liefe voll. Gesichert wird da, wo Arbeit des Nutzers
+    /// steht, und das ist der Hauptlauf.
+    ///
+    /// Dazu kommt ein gemessener Grund: Mit `--backup-dir` setzt openrsync in
+    /// dieser Zeile das Loeschen aus, ohne es zu melden. Der Integrationstest
+    /// "Ein Repo geht als Ganzes hinueber" faellt dann um.
     ///
     /// `--delete` unabhaengig von `deleteAllowed` und vom Haken im
     /// Statusfenster. Ohne Loeschen innerhalb von `.git/` ueberleben lose Refs,
@@ -269,12 +423,41 @@ public enum RsyncArguments {
         return url.path
     }
 
+    /// Schreibt die Pfadliste fuer `--files-from --from0`.
+    ///
+    /// Nullterminiert und ohne `escape`: In dieser Datei steht kein Muster,
+    /// sondern ein Name. rsync liest ihn woertlich, deshalb waere jedes
+    /// Maskierzeichen hier ein Fehler und kein Schutz.
+    ///
+    /// Jedem Eintrag steht `./` voran. Ohne das faellt ein Pfad, der mit `#`
+    /// oder `;` beginnt, still aus: rsync liest solche Zeilen als Kommentar,
+    /// und zwar auch mit `--from0`. Gemessen mit beiden Fassungen, beide
+    /// uebertrugen die Datei einfach nicht und meldeten nichts. Mit `./` davor
+    /// kommt jeder Name durch, auch `-minus.txt`, `;semi.txt` und Namen mit
+    /// Leerzeichen.
+    public static func writeFilesFromFile(
+        _ paths: [String], in directory: URL
+    ) throws -> String? {
+        guard !paths.isEmpty else { return nil }
+        let url = directory.appendingPathComponent("filesfrom")
+        let joined = paths.map { "./" + $0 }.joined(separator: "\0") + "\0"
+        try Data(joined.utf8).write(to: url, options: .atomic)
+        return url.path
+    }
+
     /// Maskiert die Musterzeichen in einem gemessenen Pfad.
     ///
     /// Die Pfade stammen aus der Auswertung, nicht vom Nutzer, koennen aber
     /// Sonderzeichen enthalten. rsync liest `*`, `?` und `[` als Muster.
+    ///
+    /// Der Backslash steht bewusst als erstes in der Liste: In rsyncs
+    /// Filtersprache ist er selbst das Maskierzeichen und muss deshalb
+    /// zuerst verdoppelt werden, sonst frisst er das Zeichen dahinter.
+    /// Das trifft jeden Pfad, den openrsync ohne `-8` maskiert ausgibt:
+    /// Eine Schutzregel fuer so einen Namen ginge ins Leere, und
+    /// `--delete` raeumte genau die Datei weg, die sie schuetzen sollte.
     static func escape(_ path: String) -> String {
-        path.map { "*?[".contains($0) ? "\\\($0)" : String($0) }.joined()
+        path.map { "\\*?[".contains($0) ? "\\\($0)" : String($0) }.joined()
     }
 
     /// Schreibt die Filterdatei fuer den Git-Lauf.

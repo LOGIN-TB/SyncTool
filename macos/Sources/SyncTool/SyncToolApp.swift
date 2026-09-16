@@ -9,7 +9,7 @@ struct SyncToolApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            StatusView(state: state)
+            StatusView(state: state, anchoredBelowMenuBar: true)
         } label: {
             // Der Anker fuer die Startargumente. Das Symbol der Menueleiste ist
             // das Einzige, was bei einer LSUIElement-App verlaesslich beim Start

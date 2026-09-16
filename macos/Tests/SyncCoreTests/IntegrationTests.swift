@@ -728,6 +728,461 @@ struct LocalFolderEngineTests {
 ///
 /// Beide rsync-Fassungen, weil genau hier die Filtersprache entscheidet:
 /// openrsync ist Protokoll 29, Homebrew liefert rsync 3.x.
+@Suite("Ersetzte und gelöschte Dateien werden weggesichert")
+struct VersionFolderEngineTests {
+    private struct Sandbox {
+        let base: URL
+        let source: URL
+        let destination: URL
+        let support: URL
+        var profile: Profile
+    }
+
+    private func makeSandbox(keepDays: Int = 30) throws -> Sandbox {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("synctool-versionen-\(UUID().uuidString)")
+        let source = base.appendingPathComponent("quelle")
+        let destination = base.appendingPathComponent("ziel")
+        let support = base.appendingPathComponent("support")
+        for url in [source, destination, support] {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        }
+        return Sandbox(
+            base: base, source: source, destination: destination, support: support,
+            profile: Profile(
+                localRoot: source.path,
+                remotePath: destination.path,
+                authMode: .password,
+                excludes: [],
+                deleteAllowed: true,
+                backupKeepDays: keepDays,
+                transport: .localFolder
+            )
+        )
+    }
+
+    private func engine(_ sandbox: Sandbox) -> SyncEngine {
+        SyncEngine(
+            runner: RsyncRunner(),
+            stateStore: SyncStateStore(url: sandbox.support.appendingPathComponent("state.json")),
+            inventoryStore: InventoryStore(directory: sandbox.support),
+            knownHosts: sandbox.support.appendingPathComponent("known_hosts"),
+            identity: sandbox.support.appendingPathComponent("id_ed25519"),
+            workspaceParent: sandbox.base
+        )
+    }
+
+    /// Dateien, die in einem `.synctool-versionen`-Ordner liegen, mit ihrem
+    /// Pfad unterhalb des Laufordners.
+    private func saved(in root: URL) -> [String] {
+        let versions = root.appendingPathComponent(VersionFolder.root)
+        guard
+            let walker = FileManager.default.enumerator(
+                at: versions, includingPropertiesForKeys: [.isRegularFileKey]
+            )
+        else { return [] }
+        return walker.compactMap { entry -> String? in
+            guard let url = entry as? URL,
+                (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+            else { return nil }
+            // Zwei Ebenen weg: der Ordner der Versionen und der des Laufs.
+            let teile = url.path.replacingOccurrences(of: versions.path + "/", with: "")
+            return teile.split(separator: "/").dropFirst().joined(separator: "/")
+        }.sorted()
+    }
+
+    private func write(_ text: String, to url: URL, age: TimeInterval = 0) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-age)], ofItemAtPath: url.path
+        )
+    }
+
+    /// Der Fall, um den es geht: Der Nutzer laedt hoch, und auf der Gegenseite
+    /// wird eine Fassung ersetzt. Ohne Sicherung waere sie danach weg.
+    @Test("Die ersetzte Fassung der Gegenseite bleibt erhalten", arguments: TestRsync.all)
+    func replacedFileSurvives(rsync: String) async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.base) }
+
+        try write("die neue, deutlich laengere Fassung", to: sandbox.source.appendingPathComponent("text.txt"))
+        try write("alt", to: sandbox.destination.appendingPathComponent("text.txt"), age: 7200)
+
+        _ = try await engine(sandbox).transfer(
+            profile: sandbox.profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 1, rsyncPath: rsync
+        )
+
+        #expect(
+            try String(contentsOf: sandbox.destination.appendingPathComponent("text.txt"), encoding: .utf8)
+                == "die neue, deutlich laengere Fassung"
+        )
+        #expect(saved(in: sandbox.destination) == ["text.txt"])
+    }
+
+    /// Und derselbe Schutz fuer die Loeschung. Das ist der Fall, den
+    /// `--max-delete` nur zaehlt, aber nicht rueckgaengig machen kann.
+    ///
+    /// Nur mit rsync 3.x: openrsync hoert mit `-b --backup-dir` still auf zu
+    /// loeschen, deshalb laesst der Motor die Sicherung dort weg. Der Test
+    /// darunter haelt genau das fest.
+    @Test(
+        "Die gelöschte Datei der Gegenseite bleibt erhalten",
+        .enabled(if: TestRsync.hasThree)
+    )
+    func deletedFileSurvives() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.base) }
+
+        try write("bleibt", to: sandbox.source.appendingPathComponent("bleibt.txt"))
+        try write("bleibt", to: sandbox.destination.appendingPathComponent("bleibt.txt"))
+        try write("weg", to: sandbox.destination.appendingPathComponent("unter/weg.txt"), age: 7200)
+
+        _ = try await engine(sandbox).transfer(
+            profile: sandbox.profile, password: nil, direction: .push,
+            includeDeletes: true, expectedItems: 0, rsyncPath: TestRsync.threePath
+        )
+
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: sandbox.destination.appendingPathComponent("unter/weg.txt").path
+            )
+        )
+        #expect(saved(in: sandbox.destination) == ["unter/weg.txt"])
+    }
+
+    /// Der Befund, der diese Fallunterscheidung noetig macht.
+    ///
+    /// openrsync mit `-b --backup-dir` und `--delete` in derselben Zeile
+    /// loescht nichts, meldet nichts und endet mit Status 0. Ein Lauf, der
+    /// sich anders verhaelt als angekuendigt, ist der Anfang jedes
+    /// Auseinanderlaufens, deshalb laesst der Motor dort die Sicherung weg und
+    /// loescht wie zugesagt. Faellt der Fehler in openrsync irgendwann weg,
+    /// schlaegt dieser Test an, und dann darf die Sonderbehandlung raus.
+    @Test("openrsync kann Sichern und Löschen nicht zusammen")
+    func openRsyncCannotBackUpWhileDeleting() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.base) }
+
+        try write("bleibt", to: sandbox.source.appendingPathComponent("bleibt.txt"))
+        try write("bleibt", to: sandbox.destination.appendingPathComponent("bleibt.txt"))
+        try write("weg", to: sandbox.destination.appendingPathComponent("unter/weg.txt"), age: 7200)
+        let ziel = sandbox.destination
+
+        // Von Hand die Zeile, die der Motor bei openrsync bewusst NICHT baut.
+        let outcome = try await RsyncRunner().execute(
+            RsyncPlan(
+                executable: TestRsync.systemRsync,
+                arguments: [
+                    "-rlpt", "-b", "--backup-dir=\(VersionFolder.root)/probe", "--delete",
+                    sandbox.source.path + "/", ziel.path + "/",
+                ],
+                // Leer wie im echten Lauf ohne ssh. Mit einem rsync 3.x im
+                // Pfad startet openrsync jenes als Gegenstelle, und dann
+                // faellt der Fehler nicht auf.
+                environment: ["PATH": "/usr/bin:/bin"]
+            ),
+            onLine: nil
+        )
+        #expect(outcome.status == 0)
+        #expect(FileManager.default.fileExists(atPath: ziel.appendingPathComponent("unter/weg.txt").path))
+
+        // Und so, wie der Motor es tatsaechlich macht: loeschen ohne Sicherung.
+        _ = try await engine(sandbox).transfer(
+            profile: sandbox.profile, password: nil, direction: .push,
+            includeDeletes: true, expectedItems: 0, rsyncPath: TestRsync.systemRsync,
+            supportsBackupWhileDeleting: false
+        )
+        #expect(!FileManager.default.fileExists(atPath: ziel.appendingPathComponent("unter/weg.txt").path))
+    }
+
+    /// Ohne diesen Ausschluss waechse der Ordner mit jedem Lauf in sich selbst
+    /// hinein, und die Bestandszahlen im Statusfenster liefen auseinander.
+    @Test("Der Sicherungsordner steht in keinem Bestand", arguments: TestRsync.all)
+    func versionsStayOutOfTheInventory(rsync: String) async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.base) }
+
+        try write("eins", to: sandbox.source.appendingPathComponent("eins.txt"))
+        try write(
+            "alte Fassung",
+            to: sandbox.destination.appendingPathComponent("\(VersionFolder.root)/2020-01-01-1200/eins.txt")
+        )
+
+        let status = try await engine(sandbox).check(
+            profile: sandbox.profile, password: nil, rsyncPath: rsync,
+            supportsChecksumField: rsync != TestRsync.systemRsync
+        )
+        #expect(!status.remotePaths.contains { $0.hasPrefix(VersionFolder.root) })
+        #expect(!status.incoming.contains { $0.path.hasPrefix(VersionFolder.root) })
+        #expect(status.deletionsOnPush.isEmpty)
+    }
+
+    @Test("Alte Sicherungen werden nach dem Lauf weggeräumt", arguments: TestRsync.all)
+    func oldVersionsAreSweptAway(rsync: String) async throws {
+        var sandbox = try makeSandbox(keepDays: 30)
+        defer { try? FileManager.default.removeItem(at: sandbox.base) }
+
+        // Eine Ersetzung, damit dieser Lauf ueberhaupt etwas wegsichert: Ohne
+        // neue Sicherung raeumt der Motor bewusst nicht auf.
+        try write("die neue, deutlich laengere Fassung", to: sandbox.source.appendingPathComponent("eins.txt"))
+        try write("alt", to: sandbox.destination.appendingPathComponent("eins.txt"), age: 7200)
+        let versions = sandbox.destination.appendingPathComponent(VersionFolder.root)
+        try write("uralt", to: versions.appendingPathComponent("2020-01-01-1200/alt.txt"))
+        try write("neulich", to: versions.appendingPathComponent(VersionFolder.path(at: Date()).split(separator: "/").last.map(String.init)! + "/jung.txt"))
+        // Fremder Ordner: nicht von uns, bleibt liegen.
+        try write("fremd", to: versions.appendingPathComponent("notizen/egal.txt"))
+        sandbox.profile.deleteAllowed = false
+
+        _ = try await engine(sandbox).transfer(
+            profile: sandbox.profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 1, rsyncPath: rsync
+        )
+
+        let verblieben = Set(
+            (try? FileManager.default.contentsOfDirectory(atPath: versions.path)) ?? []
+        )
+        #expect(!verblieben.contains("2020-01-01-1200"))
+        #expect(verblieben.contains("notizen"))
+    }
+
+    @Test("Ohne Aufbewahrung wird nichts gesichert", arguments: TestRsync.all)
+    func withoutKeepDaysNothingIsSaved(rsync: String) async throws {
+        let sandbox = try makeSandbox(keepDays: 0)
+        defer { try? FileManager.default.removeItem(at: sandbox.base) }
+
+        try write("die neue, deutlich laengere Fassung", to: sandbox.source.appendingPathComponent("text.txt"))
+        try write("alt", to: sandbox.destination.appendingPathComponent("text.txt"), age: 7200)
+
+        _ = try await engine(sandbox).transfer(
+            profile: sandbox.profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 1, rsyncPath: rsync
+        )
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: sandbox.destination.appendingPathComponent(VersionFolder.root).path
+            )
+        )
+    }
+}
+
+@Suite("Die Übertragung folgt der Prüfung")
+struct ExactTransferEngineTests {
+    private struct Sandbox {
+        let base: URL
+        let source: URL
+        let destination: URL
+        let support: URL
+        var profile: Profile
+    }
+
+    private func makeSandbox() throws -> Sandbox {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("synctool-exakt-\(UUID().uuidString)")
+        let source = base.appendingPathComponent("quelle")
+        let destination = base.appendingPathComponent("ziel")
+        let support = base.appendingPathComponent("support")
+        for url in [source, destination, support] {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        }
+        return Sandbox(
+            base: base, source: source, destination: destination, support: support,
+            profile: Profile(
+                localRoot: source.path,
+                remotePath: destination.path,
+                authMode: .password,
+                excludes: [],
+                deleteAllowed: true,
+                // Ohne Sicherungen: Hier wird geprueft, was ein Lauf anfasst
+                // und was nicht, und ein Sicherungsordner daneben macht die
+                // Erwartungen nur unuebersichtlich. Die Sicherungen haben ihre
+                // eigene Suite.
+                backupKeepDays: 0,
+                transport: .localFolder
+            )
+        )
+    }
+
+    private func engine(_ sandbox: Sandbox) -> SyncEngine {
+        SyncEngine(
+            runner: RsyncRunner(),
+            stateStore: SyncStateStore(url: sandbox.support.appendingPathComponent("state.json")),
+            inventoryStore: InventoryStore(directory: sandbox.support),
+            knownHosts: sandbox.support.appendingPathComponent("known_hosts"),
+            identity: sandbox.support.appendingPathComponent("id_ed25519"),
+            workspaceParent: sandbox.base
+        )
+    }
+
+    private func write(_ text: String, to url: URL, age: TimeInterval = 0) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-age)], ofItemAtPath: url.path
+        )
+    }
+
+    private func text(_ url: URL) throws -> String {
+        try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// Der gemeldete Datenverlust, als Test.
+    ///
+    /// Auf dem Ziel liegt die neuere Fassung, hier die aeltere. Die Pruefung
+    /// sagt "herunterladen". Wer trotzdem "Hochladen" drueckt, hat frueher die
+    /// neuere Fassung mit der aelteren ueberschrieben, weil der Lauf den ganzen
+    /// Baum nahm. Jetzt steht die Datei in der Liste der Gegenrichtung und
+    /// wird nicht angefasst.
+    @Test("Hochladen überschreibt keine neuere Fassung der Gegenseite", arguments: TestRsync.all)
+    func pushDoesNotOverwriteNewerRemoteFiles(rsync: String) async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.base) }
+        let motor = engine(sandbox)
+
+        try write("alte Fassung von hier", to: sandbox.source.appendingPathComponent("text.txt"), age: 7200)
+        try write("die neuere Fassung der Gegenseite", to: sandbox.destination.appendingPathComponent("text.txt"))
+        try write("nur hier", to: sandbox.source.appendingPathComponent("meins.txt"))
+
+        let status = try await motor.check(
+            profile: sandbox.profile, password: nil, rsyncPath: rsync,
+            supportsChecksumField: rsync != TestRsync.systemRsync
+        )
+        #expect(status.incoming.map(\.path) == ["text.txt"])
+        #expect(status.outgoing.map(\.path) == ["meins.txt"])
+
+        _ = try await motor.transfer(
+            profile: sandbox.profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: status.itemCount(for: .push),
+            remotePaths: status.remotePaths, localPaths: status.localPaths,
+            rsyncPath: rsync,
+            transferPaths: status.outgoing.map(\.path)
+        )
+
+        // Die neuere Fassung der Gegenseite steht noch.
+        #expect(try text(sandbox.destination.appendingPathComponent("text.txt"))
+            == "die neuere Fassung der Gegenseite")
+        // Und was in diese Richtung gehoerte, ist angekommen.
+        #expect(try text(sandbox.destination.appendingPathComponent("meins.txt")) == "nur hier")
+    }
+
+    /// Dieselbe Zusage fuer den echten Konflikt: beide Seiten seit dem letzten
+    /// Abgleich geaendert. Er bleibt liegen, bis jemand entscheidet.
+    @Test("Ein Konflikt bleibt in beiden Richtungen unberührt", arguments: TestRsync.all)
+    func conflictsSurviveBothDirections(rsync: String) async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.base) }
+        let motor = engine(sandbox)
+
+        // Ein Abgleich hat schon stattgefunden, danach beide Seiten angefasst.
+        SyncStateStore(url: sandbox.support.appendingPathComponent("state.json"))
+            .recordSync(for: sandbox.profile, at: Date().addingTimeInterval(-86_400))
+        try write("meine Arbeit", to: sandbox.source.appendingPathComponent("streit.txt"), age: 60)
+        try write("die Arbeit der Gegenseite", to: sandbox.destination.appendingPathComponent("streit.txt"))
+
+        let status = try await motor.check(
+            profile: sandbox.profile, password: nil, rsyncPath: rsync,
+            supportsChecksumField: rsync != TestRsync.systemRsync
+        )
+        #expect(status.conflicts.map(\.path) == ["streit.txt"])
+
+        for richtung in [SyncDirection.push, .pull] {
+            _ = try await motor.transfer(
+                profile: sandbox.profile, password: nil, direction: richtung,
+                includeDeletes: false, expectedItems: 0,
+                remotePaths: status.remotePaths, localPaths: status.localPaths,
+                rsyncPath: rsync,
+                transferPaths: richtung == .pull
+                    ? status.incoming.map(\.path) : status.outgoing.map(\.path)
+            )
+        }
+
+        // Keine der beiden Fassungen ist verschwunden.
+        #expect(try text(sandbox.source.appendingPathComponent("streit.txt")) == "meine Arbeit")
+        #expect(try text(sandbox.destination.appendingPathComponent("streit.txt"))
+            == "die Arbeit der Gegenseite")
+    }
+
+    /// Der Loeschlauf raeumt weg, was die Pruefung benannt hat, und ersetzt
+    /// dabei nichts. Genau dafuer stehen `--existing` und `--ignore-existing`
+    /// in seiner Zeile.
+    @Test("Der Löschlauf räumt auf, ohne etwas zu überschreiben", arguments: TestRsync.all)
+    func theDeleteRunOnlyDeletes(rsync: String) async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.base) }
+        let motor = engine(sandbox)
+
+        // Beim letzten Abgleich lagen beide Dateien auf beiden Seiten.
+        InventoryStore(directory: sandbox.support).record(
+            for: sandbox.profile, commonPaths: ["bleibt.txt", "weg.txt"]
+        )
+        try write("bleibt", to: sandbox.source.appendingPathComponent("bleibt.txt"))
+        try write("bleibt", to: sandbox.destination.appendingPathComponent("bleibt.txt"))
+        // Hier geloescht, drueben noch da.
+        try write("weg", to: sandbox.destination.appendingPathComponent("weg.txt"), age: 7200)
+        // Und etwas, das nur die Gegenseite hat und behalten muss.
+        try write("frisch drüben", to: sandbox.destination.appendingPathComponent("neu-drueben.txt"))
+
+        let status = try await motor.check(
+            profile: sandbox.profile, password: nil, rsyncPath: rsync,
+            supportsChecksumField: rsync != TestRsync.systemRsync
+        )
+        #expect(status.deletionsOnPush.map(\.path) == ["weg.txt"])
+
+        _ = try await motor.transfer(
+            profile: sandbox.profile, password: nil, direction: .push,
+            includeDeletes: true, expectedDeletions: status.deletionsOnPush.count,
+            protectedPaths: status.protectedOnPush,
+            expectedItems: status.itemCount(for: .push),
+            remotePaths: status.remotePaths, localPaths: status.localPaths,
+            rsyncPath: rsync,
+            transferPaths: status.outgoing.map(\.path)
+        )
+
+        #expect(!FileManager.default.fileExists(
+            atPath: sandbox.destination.appendingPathComponent("weg.txt").path))
+        // Was drueben neu ist, ueberlebt: Es steht in der Schutzdatei.
+        #expect(try text(sandbox.destination.appendingPathComponent("neu-drueben.txt"))
+            == "frisch drüben")
+        #expect(try text(sandbox.destination.appendingPathComponent("bleibt.txt")) == "bleibt")
+    }
+
+    /// Namen, an denen die Pfadliste scheitern koennte. Die Raute ist der
+    /// gefaehrlichste Fall: rsync liest solche Zeilen als Kommentar, auch mit
+    /// `--from0`, und die Datei fiele ohne das vorangestellte `./` still aus.
+    @Test("Sonderzeichen im Namen kommen durch die Liste", arguments: TestRsync.all)
+    func specialCharactersSurviveTheList(rsync: String) async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.base) }
+        let namen = [
+            "#raute.txt", ";semi.txt", "-minus.txt", "mit leer.txt",
+            "Ümläut – Test.txt", "stern*name[1].txt",
+        ]
+        for name in namen {
+            try write(name, to: sandbox.source.appendingPathComponent(name))
+        }
+
+        _ = try await engine(sandbox).transfer(
+            profile: sandbox.profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: namen.count,
+            rsyncPath: rsync, transferPaths: namen
+        )
+
+        for name in namen {
+            #expect(
+                FileManager.default.fileExists(
+                    atPath: sandbox.destination.appendingPathComponent(name).path
+                ),
+                "\(name) fehlt auf der Gegenseite"
+            )
+        }
+    }
+}
+
 @Suite("Git-Repos von Ende zu Ende")
 struct GitRepositoryEngineTests {
     private struct Sandbox {
@@ -793,13 +1248,7 @@ struct GitRepositoryEngineTests {
         try String(contentsOf: url, encoding: .utf8)
     }
 
-    private static let rsyncs: [String] = {
-        var found = [TestRsync.systemRsync]
-        if let three = TestRsync.three { found.append(three) }
-        return found
-    }()
-
-    @Test("Ein Repo geht als Ganzes hinüber, alte Refs überleben nicht", arguments: rsyncs)
+    @Test("Ein Repo geht als Ganzes hinüber, alte Refs überleben nicht", arguments: TestRsync.all)
     func repositoryTransfersAsAWhole(rsync: String) async throws {
         let sandbox = try makeSandbox()
         defer { try? FileManager.default.removeItem(at: sandbox.base) }
@@ -866,7 +1315,7 @@ struct GitRepositoryEngineTests {
         #expect(exists(local.appendingPathComponent("nur-hier-oben.txt")))
     }
 
-    @Test("Ein Repo, das auseinanderläuft, bleibt unberührt", arguments: rsyncs)
+    @Test("Ein Repo, das auseinanderläuft, bleibt unberührt", arguments: TestRsync.all)
     func divergedRepositoryStaysUntouched(rsync: String) async throws {
         let sandbox = try makeSandbox()
         defer { try? FileManager.default.removeItem(at: sandbox.base) }
@@ -903,7 +1352,7 @@ struct GitRepositoryEngineTests {
         #expect(try text(local.appendingPathComponent("P/quelle.swift")) == "neu")
     }
 
-    @Test("Ein Repo, das es hier noch nicht gibt, wird angelegt", arguments: rsyncs)
+    @Test("Ein Repo, das es hier noch nicht gibt, wird angelegt", arguments: TestRsync.all)
     func newRepositoryIsCreated(rsync: String) async throws {
         let sandbox = try makeSandbox()
         defer { try? FileManager.default.removeItem(at: sandbox.base) }

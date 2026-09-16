@@ -29,6 +29,10 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
     /// Notbremse: bricht ab, statt mehr als so viele Dateien zu loeschen.
     public var maxDelete: Int
 
+    /// Wie lange die Empfaengerseite aufhebt, was ein Lauf ersetzt oder
+    /// geloescht hat. 0 heisst: gar nicht sichern.
+    public var backupKeepDays: Int
+
     /// Vergleich per Pruefsumme statt Groesse und Zeitstempel. Langsam, aber gruendlich.
     public var useChecksum: Bool
 
@@ -73,6 +77,7 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
         excludes: [String] = Profile.defaultExcludes,
         deleteAllowed: Bool = false,
         maxDelete: Int = 100,
+        backupKeepDays: Int = 30,
         useChecksum: Bool = false,
         rsyncPath: String = "",
         backupDestination: String = "",
@@ -94,6 +99,7 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
         self.excludes = excludes
         self.deleteAllowed = deleteAllowed
         self.maxDelete = maxDelete
+        self.backupKeepDays = backupKeepDays
         self.useChecksum = useChecksum
         self.rsyncPath = rsyncPath
         self.backupDestination = backupDestination
@@ -134,6 +140,7 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
         excludes = value(.excludes, fallback.excludes)
         deleteAllowed = value(.deleteAllowed, fallback.deleteAllowed)
         maxDelete = value(.maxDelete, fallback.maxDelete)
+        backupKeepDays = value(.backupKeepDays, fallback.backupKeepDays)
         useChecksum = value(.useChecksum, fallback.useChecksum)
         rsyncPath = value(.rsyncPath, fallback.rsyncPath)
         backupDestination = value(.backupDestination, fallback.backupDestination)
@@ -172,6 +179,18 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
         // mitwandern, laege auf beiden Seiten dieselbe, und sie koennte zwei
         // Ordner nicht mehr auseinanderhalten.
         ".synctool-ziel",
+    ]
+
+    /// Was die App selbst im Ziel ablegt. Gilt immer, unabhaengig von der
+    /// Ausschlussliste des Nutzers und davon, was er daran aendert.
+    ///
+    /// Ausgeschlossen heisst bei rsync zugleich vor `--delete` geschuetzt.
+    /// Genau das ist hier der Zweck: Die weggesicherten Fassungen der
+    /// Gegenseite duerfen von keinem Lauf weggeraeumt werden, und die
+    /// Teildateien eines abgebrochenen Laufs gehoeren in keinen Bestand.
+    public static let internalExcludes: [String] = [
+        "/\(VersionFolder.root)/",
+        "/.synctool-partial/",
     ]
 
     /// `.git/` fehlt hier bewusst: ohne History ist der Abgleich zwischen

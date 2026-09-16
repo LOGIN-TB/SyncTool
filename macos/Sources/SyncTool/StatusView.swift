@@ -13,6 +13,9 @@ struct StatusView: View {
         state.selectedProfile?.transport.remoteLabelInPlace ?? "im Ziel"
     }
     @ObservedObject var state: AppState
+    /// Nur fuer das Fenster an der Menueleiste. Die gleichnamige Szene fuer die
+    /// Bildschirmfoto-Werkstatt ist ein gewoehnliches Fenster und bleibt aus.
+    var anchoredBelowMenuBar: Bool = false
     @Environment(\.openWindow) private var openWindow
 
     @State private var showLog = false
@@ -71,6 +74,10 @@ struct StatusView: View {
         // `.background(.thickMaterial)` ersetzen und die weichere Schrift
         // in Kauf nehmen.
         .background(Color(nsColor: .windowBackgroundColor))
+        // Bewusst keine Hoehenangabe, siehe den Kommentar ueber `body`. Das
+        // Fenster darf mit dem Inhalt wachsen, es soll dabei nur nicht unter
+        // dem Symbol wegwandern.
+        .anchoredBelowMenuBar(anchoredBelowMenuBar)
         .onChange(of: state.selectedProfileID) { _, _ in
             // Beide haengen am Profil: ein fuer A gesetzter Haken darf nach dem
             // Umschalten auf B nicht stehen bleiben, B erlaubt womoeglich gar
@@ -130,18 +137,34 @@ struct StatusView: View {
     }
 
     @ViewBuilder
+    /// Waehrend der Pruefung haben sich Dateien bewegt.
+    ///
+    /// Ohne diesen Hinweis stuende im Statusfenster schlicht nichts zum
+    /// Loeschen, und der Nutzer wuesste nicht, ob es nichts zu loeschen gibt
+    /// oder ob die App die Frage nicht beantworten konnte. Das ist ein
+    /// Unterschied, der ihn etwas angeht.
+    private var incompleteInventoryNotice: String? {
+        guard let status = state.resolvedStatus, !status.inventoryComplete else { return nil }
+        return "Während der Prüfung haben sich Dateien bewegt, die Bestandsliste ist "
+            + "deshalb unvollständig. Übertragen geht, gelöscht wird auf dieser Grundlage "
+            + "nichts: Eine Datei, die beim Auflisten verschwand, sieht genauso aus wie "
+            + "eine gelöschte. Noch einmal prüfen."
+    }
+
     private var banners: some View {
         let warning = state.rsyncWarning
         let notice = state.notice
+        let incomplete = incompleteInventoryNotice
         let failure: String? = {
             if case .failed(let message) = state.phase { return message }
             return nil
         }()
 
-        if warning != nil || notice != nil || failure != nil {
+        if warning != nil || notice != nil || incomplete != nil || failure != nil {
             VStack(alignment: .leading, spacing: 6) {
                 if let warning { Banner(text: warning, kind: .warning) }
                 if let notice { Banner(text: notice, kind: .info) }
+                if let incomplete { Banner(text: incomplete, kind: .warning) }
                 if let failure { Banner(text: failure, kind: .error) }
             }
             .padding(.horizontal, inset)
@@ -391,6 +414,7 @@ struct StatusView: View {
     @ViewBuilder
     private func actions(_ status: SyncStatus) -> some View {
         transferActions(status)
+        untouchedNote(status)
         if state.canReconcileRepositories {
             Button {
                 Task { await state.reconcileRepositories() }
@@ -401,6 +425,26 @@ struct StatusView: View {
             .controlSize(.large)
             .buttonStyle(.bordered)
             .disabled(state.phase.isBusy)
+        }
+    }
+
+    /// Was ein Lauf in dieser Richtung stehen laesst.
+    ///
+    /// Die Zahl am Knopf zaehlt nur, was tatsaechlich hinuebergeht. Ohne diese
+    /// Zeile koennte man meinen, "Hochladen" raeume alles ab, was oben in der
+    /// Liste steht. Es tut weniger, und das ist der Punkt.
+    @ViewBuilder
+    private func untouchedNote(_ status: SyncStatus) -> some View {
+        if !status.conflicts.isEmpty {
+            Text(
+                "\(Format.count(status.conflicts.count, singular: "Konflikt bleibt", plural: "Konflikte bleiben")) "
+                    + "in diesem Lauf unberührt. Beide Fassungen bleiben, wo sie sind, "
+                    + "bis du entscheidest."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -580,7 +624,9 @@ struct StatusView: View {
 private struct InventoryBalance: View {
     let remoteLabel: String
     let report: InventoryReport
-    @State private var expanded = false
+    @State private var excludedExpanded = false
+    @State private var settledExpanded = false
+    @State private var restExpanded = false
 
     private var differs: Bool {
         report.remoteFiles != report.localFiles
@@ -590,7 +636,7 @@ private struct InventoryBalance: View {
     /// Orange nur, wenn der Unterschied offen ist. Liegt er ganz in Repos auf
     /// gleichem Stand, ist er erklaert, und ein Warnton daneben widerspraeche
     /// dem gruenen Haken darueber.
-    private var unexplained: Bool { report.differsBeyondSettled }
+    private var unexplained: Bool { report.hasUnexplainedEntries }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -604,21 +650,115 @@ private struct InventoryBalance: View {
             }
 
             if differs && !unexplained && report.settledRepositories > 0 { settledNote }
+            if unexplained { rest }
             if report.excludedCount > 0 { excluded }
         }
     }
 
     /// Die Antwort auf "warum steht da ein Haken und trotzdem ein Ungleich".
+    ///
+    /// Frueher stand hier ein Satz, der das behauptete. Jetzt steht die
+    /// Rechnung daneben: je Repo die Zahl beider Seiten und die Differenz mit
+    /// Vorzeichen. Die Zeilen addieren sich zu der Zahl, die oben steht, und
+    /// damit laesst sich die Aussage nachrechnen statt glauben.
     private var settledNote: some View {
-        Text(
-            "Die \(Format.number(report.difference)) Einträge Unterschied liegen in Repos, "
-                + "die auf beiden Seiten auf demselben Stand stehen: dieselben Commits, "
-                + "anders gepackt. Übertragen wird da nichts."
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        DisclosureGroup(isExpanded: $settledExpanded) {
+            VStack(alignment: .leading, spacing: 4) {
+                BoundedList(count: report.settled.count, rowHeight: 16) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(report.settled.filter { $0.difference != 0 }) { repo in
+                            HStack(spacing: 6) {
+                                Text(repo.displayName)
+                                    .font(.caption.monospaced())
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer(minLength: 8)
+                                Text(
+                                    "\(remoteLabel) \(Format.number(repo.remote)) · "
+                                        + "lokal \(Format.number(repo.local)) · "
+                                        + (repo.difference > 0 ? "+" : "")
+                                        + "\(repo.difference)"
+                                )
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                Text(
+                    "Dieselben Commits, anders gepackt: git benennt seine Packdateien nach "
+                        + "ihrem Inhalt und packt von sich aus um. Übertragen wird da nichts."
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
+            }
+            .padding(.leading, 18)
+            .padding(.top, 4)
+        } label: {
+            Text(
+                "\(Format.count(report.difference, singular: "Eintrag", plural: "Einträge")) "
+                    + "Unterschied, alle in "
+                    + "\(Format.count(report.settledRepositories, singular: "Repo", plural: "Repos")) "
+                    + "auf gleichem Stand"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Was die Repos nicht erklären.
+    ///
+    /// Die Beschriftung sagt, was gemessen wurde, und nicht, was daraus folgt:
+    /// "N Einträge liegen nur auf einer Seite". Das Wort "erklärt" steht
+    /// nirgends, solange hier etwas steht.
+    private var rest: some View {
+        DisclosureGroup(isExpanded: $restExpanded) {
+            VStack(alignment: .leading, spacing: 4) {
+                BoundedList(count: report.unexplained.count, rowHeight: 14) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(report.unexplained.prefix(200)) { eintrag in
+                            HStack(spacing: 6) {
+                                Text(eintrag.path)
+                                    .font(.caption2.monospaced())
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer(minLength: 8)
+                                Text(eintrag.side == .remote ? "nur \(remoteLabel)" : "nur lokal")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if report.unexplainedCount > 200 {
+                            Text(
+                                "… und \(Format.number(report.unexplainedCount - 200)) weitere"
+                            )
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Text(
+                    "Diese Einträge liegen auf genau einer Seite und in keinem Repo auf "
+                        + "gleichem Stand. Sie sind der Grund, warum die beiden Zahlen "
+                        + "auseinandergehen."
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
+            }
+            .padding(.leading, 18)
+            .padding(.top, 4)
+        } label: {
+            Text(
+                "\(Format.count(report.unexplainedCount, singular: "Eintrag liegt", plural: "Einträge liegen")) "
+                    + "nur auf einer Seite"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+        }
     }
 
     private func side(_ title: String, _ files: Int, _ directories: Int, _ bytes: Int64) -> some View {
@@ -644,7 +784,7 @@ private struct InventoryBalance: View {
     }
 
     private var excluded: some View {
-        DisclosureGroup(isExpanded: $expanded) {
+        DisclosureGroup(isExpanded: $excludedExpanded) {
             BoundedList(count: report.excluded.count, rowHeight: 14) {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(report.excluded.prefix(100)) { branch in
@@ -752,8 +892,9 @@ private struct ConflictSection: View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(
-                    "Diese Dateien wurden auf beiden Seiten verändert. Welche Richtung du "
-                        + "zuerst ausführst, gewinnt – die andere Fassung ist danach weg."
+                    "Diese Dateien wurden auf beiden Seiten verändert. Kein Lauf fasst sie "
+                        + "an: Beide Fassungen bleiben, wo sie sind, bis du entscheidest. "
+                        + "Vergleichen, von Hand zusammenführen, dann noch einmal prüfen."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

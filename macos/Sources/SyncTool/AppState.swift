@@ -587,12 +587,28 @@ final class AppState: ObservableObject {
                 password: password,
                 direction: direction,
                 includeDeletes: includeDeletes,
+                // Was die Ruecksprache angekuendigt hat. Der Lauf bricht ab,
+                // wenn wesentlich mehr zum Loeschen ansteht: wer "17 Dateien
+                // löschen?" bestaetigt hat, hat nicht hundert erlaubt.
+                expectedDeletions: includeDeletes
+                    ? (direction == .pull
+                        ? current?.deletionsOnPull.count : current?.deletionsOnPush.count)
+                    : nil,
                 protectedPaths: includeDeletes ? protectedPaths : [],
                 expectedItems: expected,
                 gitUnits: current?.gitUnits ?? [],
                 remotePaths: current?.remotePaths ?? [],
                 localPaths: current?.localPaths ?? [],
+                checkedAt: current?.checkedAt,
                 rsyncPath: rsync.path,
+                // openrsync vertraegt Sicherung und Loeschen nicht zusammen.
+                supportsBackupWhileDeleting: !rsync.isOpenRsync,
+                inventoryComplete: current?.inventoryComplete ?? true,
+                // Genau die Pfade, die die Pruefung dieser Richtung zugeordnet
+                // hat. Konflikte stehen in keiner der beiden Listen und bleiben
+                // deshalb liegen, statt einseitig ueberschrieben zu werden.
+                transferPaths: direction == .pull
+                    ? current?.incoming.map(\.path) : current?.outgoing.map(\.path),
                 onLog: { [weak self] line in
                     Task { @MainActor in self?.append(line) }
                 },

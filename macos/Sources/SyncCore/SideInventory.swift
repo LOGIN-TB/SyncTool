@@ -39,10 +39,25 @@ public struct InventoryEntry: Sendable, Hashable {
 public struct SideInventory: Sendable {
     public let entries: [String: InventoryEntry]
     public let capturedAt: Date
+    /// Lief der Bestandslauf sauber durch?
+    ///
+    /// `false` heisst: Waehrend der Auflistung sind Dateien verschwunden
+    /// (rsync-Status 24). Die Liste ist dann unvollstaendig, und eine
+    /// unvollstaendige Liste kann nur in eine Richtung falsch liegen: Ein
+    /// fehlender Eintrag sieht aus wie ein geloeschter. Deshalb traegt der
+    /// Bestand diese Auskunft mit, statt sie unterwegs zu verlieren.
+    ///
+    /// Vorbelegt mit `true`, damit jeder vorhandene Aufruf gueltig bleibt.
+    public let isComplete: Bool
 
-    public init(entries: [String: InventoryEntry], capturedAt: Date = Date()) {
+    public init(
+        entries: [String: InventoryEntry],
+        capturedAt: Date = Date(),
+        isComplete: Bool = true
+    ) {
         self.entries = entries
         self.capturedAt = capturedAt
+        self.isComplete = isComplete
     }
 
     public var paths: Set<String> { Set(entries.keys) }
@@ -70,14 +85,14 @@ public enum InventoryBuilder {
     /// Der Wurzeleintrag "./" faellt raus: rsync meldet ihn immer, er steht aber
     /// fuer den Stammordner selbst und nicht fuer etwas darin.
     public static func build(
-        from entries: [InventoryEntry], capturedAt: Date = Date()
+        from entries: [InventoryEntry], capturedAt: Date = Date(), isComplete: Bool = true
     ) -> SideInventory {
         var indexed: [String: InventoryEntry] = [:]
         indexed.reserveCapacity(entries.count)
         for entry in entries where entry.path != "./" && entry.path != "." {
             indexed[entry.path] = entry
         }
-        return SideInventory(entries: indexed, capturedAt: capturedAt)
+        return SideInventory(entries: indexed, capturedAt: capturedAt, isComplete: isComplete)
     }
 }
 
@@ -118,6 +133,61 @@ public struct ExcludedBranch: Sendable, Hashable, Identifiable {
     }
 }
 
+/// Ein Repo auf gleichem Stand, mit seiner Eintragszahl je Seite.
+///
+/// Dieselben Commits, anders gepackt: `git` benennt seine Packdateien nach
+/// ihrem Inhalt und packt nach jedem `fetch` und nach genug Commits von sich
+/// aus um. Zwei Rechner auf demselben Stand haben deshalb verschieden viele
+/// Dateien unter `.git/`, und genau das treibt die beiden Bestandszahlen im
+/// Statusfenster auseinander, ohne dass etwas zu tun waere.
+public struct SettledRepository: Sendable, Hashable, Identifiable {
+    public var id: String { branch }
+    /// Der `.git`-Zweig, etwa `Projekt/.git/`.
+    public let branch: String
+    public let remote: Int
+    public let local: Int
+
+    public init(branch: String, remote: Int, local: Int) {
+        self.branch = branch
+        self.remote = remote
+        self.local = local
+    }
+
+    /// Mit Vorzeichen, nicht als Betrag: Nur so addieren sich die Zeilen zur
+    /// Gesamtdifferenz, und genau das macht die Anzeige nachrechenbar.
+    public var difference: Int { remote - local }
+
+    /// `Projekt/.git/` wird zu `Projekt`.
+    public var displayName: String {
+        let root = branch.hasSuffix(".git/") ? String(branch.dropLast(5)) : branch
+        return root.isEmpty ? "Stammordner" : String(root.dropLast())
+    }
+}
+
+/// Ein Pfad, den es nur auf einer Seite gibt und der in keinem Repo auf
+/// gleichem Stand liegt.
+///
+/// Das ist der Rest, der eine Differenz zwischen den beiden Bestandszahlen
+/// wirklich erklaert oder eben offen laesst.
+public struct OneSidedEntry: Sendable, Hashable, Identifiable {
+    /// Bewusst hier genestet und nicht `RsyncArguments.InventorySide`: Das dort
+    /// bezeichnet, welcher rsync-Lauf gemeint ist, das hier, auf welcher Seite
+    /// ein Pfad liegt. Zwei verschiedene Fragen.
+    public enum Side: String, Sendable {
+        case remote
+        case local
+    }
+
+    public var id: String { "\(side.rawValue):\(path)" }
+    public let path: String
+    public let side: Side
+
+    public init(path: String, side: Side) {
+        self.path = path
+        self.side = side
+    }
+}
+
 /// Zahlen, die sich gegen einen FTP-Client halten lassen.
 public struct InventoryReport: Sendable {
     public let remoteFiles: Int
@@ -128,16 +198,24 @@ public struct InventoryReport: Sendable {
     public let localBytes: Int64
     /// Lokal vorhanden, aber wegen der Ausschlussliste nie betrachtet.
     public let excluded: [ExcludedBranch]
-    /// Eintraege je Seite, die in einem Repo auf gleichem Stand liegen.
+    /// Die Repos auf gleichem Stand, je mit ihrer Eintragszahl auf beiden
+    /// Seiten.
     ///
-    /// Die Zahlen oben sind roh gezaehlt, damit sie sich gegen einen FTP-Client
-    /// halten lassen. Ein Repo, dessen Zeiger beidseitig uebereinstimmen, wird
-    /// trotzdem nicht uebertragen, und seine verschieden benannten Packdateien
-    /// treiben die beiden Summen auseinander. Ohne diese Zahl stuende dort ein
-    /// Unterschied ohne Erklaerung.
-    public let settledRemote: Int
-    public let settledLocal: Int
-    public let settledRepositories: Int
+    /// Die Zahlen oben sind roh gezaehlt, damit sie sich gegen einen
+    /// FTP-Client halten lassen. Ein Repo, dessen Zeiger beidseitig
+    /// uebereinstimmen, wird trotzdem nicht uebertragen, und seine verschieden
+    /// benannten Packdateien treiben die beiden Summen auseinander. Ohne diese
+    /// Aufschluesselung stuende dort ein Unterschied ohne Erklaerung.
+    public let settled: [SettledRepository]
+
+    /// Pfade, die es nur auf einer Seite gibt und die in keinem Repo auf
+    /// gleichem Stand liegen. Gekappt, `unexplainedCount` zaehlt vollstaendig.
+    public let unexplained: [OneSidedEntry]
+    public let unexplainedCount: Int
+
+    /// Mehr als so viele einseitige Pfade braucht niemand in einer Liste. Wer
+    /// dreihundert sieht, sieht dasselbe wie bei fuenfhundert.
+    public static let unexplainedLimit = 500
 
     public init(
         remoteFiles: Int = 0,
@@ -147,9 +225,9 @@ public struct InventoryReport: Sendable {
         localDirectories: Int = 0,
         localBytes: Int64 = 0,
         excluded: [ExcludedBranch] = [],
-        settledRemote: Int = 0,
-        settledLocal: Int = 0,
-        settledRepositories: Int = 0
+        settled: [SettledRepository] = [],
+        unexplained: [OneSidedEntry] = [],
+        unexplainedCount: Int = 0
     ) {
         self.remoteFiles = remoteFiles
         self.remoteDirectories = remoteDirectories
@@ -158,9 +236,9 @@ public struct InventoryReport: Sendable {
         self.localDirectories = localDirectories
         self.localBytes = localBytes
         self.excluded = excluded
-        self.settledRemote = settledRemote
-        self.settledLocal = settledLocal
-        self.settledRepositories = settledRepositories
+        self.settled = settled
+        self.unexplained = unexplained
+        self.unexplainedCount = unexplainedCount
     }
 
     public init(
@@ -169,10 +247,30 @@ public struct InventoryReport: Sendable {
         excludedPaths: [String],
         settledBranches: Set<String> = []
     ) {
-        func inSettled(_ paths: Set<String>) -> Int {
-            guard !settledBranches.isEmpty else { return 0 }
-            return paths.count { path in settledBranches.contains { path.hasPrefix($0) } }
+        let sorted = settledBranches.sorted()
+        /// Der erste Zweig, unter dem dieser Pfad liegt.
+        func branch(of path: String) -> String? {
+            sorted.first { path.hasPrefix($0) }
         }
+
+        var counts: [String: (remote: Int, local: Int)] = [:]
+        for name in sorted { counts[name] = (0, 0) }
+        var rest: [OneSidedEntry] = []
+
+        for path in remote.paths {
+            if let name = branch(of: path) { counts[name]?.remote += 1 }
+            else if local.entries[path] == nil {
+                rest.append(OneSidedEntry(path: path, side: .remote))
+            }
+        }
+        for path in local.paths {
+            if let name = branch(of: path) { counts[name]?.local += 1 }
+            else if remote.entries[path] == nil {
+                rest.append(OneSidedEntry(path: path, side: .local))
+            }
+        }
+        rest.sort { ($0.path, $0.side.rawValue) < ($1.path, $1.side.rawValue) }
+
         self.init(
             remoteFiles: remote.fileCount,
             remoteDirectories: remote.directoryCount,
@@ -181,24 +279,44 @@ public struct InventoryReport: Sendable {
             localDirectories: local.directoryCount,
             localBytes: local.totalBytes,
             excluded: ExcludedBranch.group(excludedPaths),
-            settledRemote: inSettled(remote.paths),
-            settledLocal: inSettled(local.paths),
-            settledRepositories: settledBranches.count
+            settled: sorted.map {
+                SettledRepository(
+                    branch: $0, remote: counts[$0]?.remote ?? 0, local: counts[$0]?.local ?? 0
+                )
+            },
+            unexplained: Array(rest.prefix(Self.unexplainedLimit)),
+            unexplainedCount: rest.count
         )
     }
 
     /// Alle ausgeschlossenen Eintraege, nicht nur die Zweige.
     public var excludedCount: Int { excluded.reduce(0) { $0 + $1.count } }
 
+    public var settledRemote: Int { settled.reduce(0) { $0 + $1.remote } }
+    public var settledLocal: Int { settled.reduce(0) { $0 + $1.local } }
+    public var settledRepositories: Int { settled.count }
+
     /// Wie weit die beiden Summen auseinanderliegen.
     public var difference: Int {
         abs((remoteFiles + remoteDirectories) - (localFiles + localDirectories))
     }
 
-    /// Gehen die Zahlen auch dann noch auseinander, wenn man die Repos auf
-    /// gleichem Stand herausrechnet?
-    public var differsBeyondSettled: Bool {
-        (remoteFiles + remoteDirectories - settledRemote)
-            != (localFiles + localDirectories - settledLocal)
-    }
+    /// Bleibt ein Pfad uebrig, den die Repos auf gleichem Stand nicht erklaeren?
+    ///
+    /// Hier stand frueher ein Vergleich zweier Zahlen: Zieh die Repos ab, dann
+    /// muss auf beiden Seiten dieselbe Zahl uebrigbleiben. Das ist kein Beweis,
+    /// sondern eine Wette. Liegt eine Datei nur auf dem Server und eine andere
+    /// nur hier, heben sich die beiden Abweichungen in der Rechnung gegenseitig
+    /// auf, und die Anzeige behauptete, die Differenz laege in den Repos.
+    /// Zwei Dateien, die nirgends liegen, wo das behauptet wird.
+    ///
+    /// Deshalb jetzt ueber die Mengen: Die Summen koennen sich nur durch Pfade
+    /// unterscheiden, die es auf genau einer Seite gibt. Pfade auf beiden
+    /// Seiten kuerzen sich heraus, egal wie verschieden ihr Inhalt ist. Bleibt
+    /// nach Abzug der Repos auf gleichem Stand nichts uebrig, und nur dann, ist
+    /// die Differenz erklaert.
+    ///
+    /// Wer das hier je wieder auf einen Zahlenvergleich zurueckbaut, weil es
+    /// einfacher aussieht, baut den Fehler mit zurueck.
+    public var hasUnexplainedEntries: Bool { unexplainedCount > 0 }
 }

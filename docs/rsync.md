@@ -23,6 +23,8 @@ schlägt sie `brew install rsync` vor. Welche Fassung läuft, steht unter
 schriebe das Literal in die Zeile. Die App erkennt das und lässt den
 Prüfsummenvergleich weg; verglichen wird dann über Größe und Zeitstempel.
 
+**Sicherungen beim Löschen**, siehe unten.
+
 Das Häkchen „Prüfsumme" im Profil bleibt gesetzt, es wirkt nur nicht. Das ist
 richtig so: wer später Homebrew-rsync installiert, will seine Einstellung
 wiederfinden.
@@ -61,7 +63,42 @@ Ein Unterschied bleibt: **`--max-delete` bricht bei rsync 3.x ab (Status 25), be
 openrsync nicht.** Dort heißt es nur „once MAX files have been deleted, do not
 delete any more files", der Lauf hört still auf zu löschen und hinterlässt genau
 den Mischzustand, um den es geht. SyncTool zählt die Löschzeilen deshalb nach
-und bricht selbst ab. Siehe [git.md](git.md).
+und bricht selbst ab, in jedem Lauf. Siehe [git.md](git.md).
+
+## openrsync kann Sichern und Löschen nicht zusammen
+
+Stehen `-b --backup-dir=…` und `--delete` in derselben Zeile, löscht openrsync
+nichts. Kein Abbruch, keine Meldung, Status 0. Der Nutzer hat im
+Rücksprachefenster Dateien zum Löschen freigegeben, und der Lauf meldet Erfolg,
+ohne sie anzufassen.
+
+Gemessen mit `env -i PATH=/usr/bin:/bin`, also openrsync gegen sich selbst. Mit
+einem rsync 3.x im Pfad fällt es nicht auf: openrsync startet dann jenes als
+Gegenstelle, und die macht es richtig. Genau deshalb ist es so lange
+unbemerkt geblieben.
+
+SyncTool lässt die Sicherung in dieser Kombination weg und löscht wie zugesagt.
+Ein Lauf, der sich anders verhält als angekündigt, ist der Anfang jedes
+Auseinanderlaufens. Der Integrationstest „openrsync kann Sichern und Löschen
+nicht zusammen" hält den Befund fest; fällt der Fehler eines Tages weg, schlägt
+er an, und dann darf die Sonderbehandlung raus.
+
+## Die Pfadliste des Inhaltslaufs
+
+Ein Lauf überträgt genau die gemessenen Pfade, über `--files-from` und
+`--from0`. Nullterminiert, damit ein Zeilenumbruch im Dateinamen keine Frage
+mehr ist, und ohne jedes Maskierzeichen: In dieser Datei steht ein Name und
+kein Muster.
+
+Jedem Eintrag steht `./` voran. Ohne das fällt ein Pfad, der mit `#` oder `;`
+beginnt, still aus: rsync liest solche Zeilen als Kommentar, und zwar auch mit
+`--from0`. Beide Fassungen übertrugen die Datei einfach nicht und meldeten
+nichts.
+
+Ein Unterschied zwischen den Fassungen, der hier nicht stört: `--exclude-from`
+wirkt bei rsync 3.x nicht auf die in der Liste genannten Pfade, bei openrsync
+schon. Die Liste stammt aus dem Bestandslauf, der die Ausschlüsse bereits
+angewandt hat, es steht also ohnehin nichts Ausgeschlossenes darin.
 
 ## Auf der Gegenseite muss rsync liegen
 

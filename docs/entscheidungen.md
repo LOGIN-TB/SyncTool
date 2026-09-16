@@ -34,8 +34,28 @@ gar nicht: ein Bestandslauf darf unter keinen Umständen etwas anfassen.
   Zeitstempel lassen sich auf der Gegenseite nicht setzen und wichen sonst
   dauerhaft ab.
 
-Konflikte werden nur angezeigt, nicht aufgelöst. Welche Richtung zuerst
-ausgeführt wird, gewinnt.
+## Die Übertragung folgt der Entscheidung
+
+Ein Lauf überträgt genau die Pfade, die die Prüfung seiner Richtung zugeordnet
+hat, über `--files-from`. Nicht mehr.
+
+Vorher war das ein voller einseitiger rsync über den ganzen Baum. Der fasste
+auch Dateien an, die die Prüfung der Gegenrichtung zugeordnet hatte: Wer
+„Hochladen" drückte, überschrieb damit die neuere Fassung der Gegenstelle mit
+der älteren von hier. Und jeder gemeldete Konflikt wurde einseitig
+plattgemacht, obwohl direkt daneben stand, dass genau das passiert.
+
+**Konflikte werden angezeigt und nicht angefasst.** Sie stehen in keiner der
+beiden Listen, deshalb rührt sie kein Lauf an. Beide Fassungen bleiben, wo sie
+sind, bis jemand entscheidet. Aufgelöst wird von Hand.
+
+Gelöscht wird in einem eigenen zweiten Lauf, siehe [loeschen.md](loeschen.md).
+
+`--update` wäre die billige Antwort gewesen und deckt den Fall nicht ab. Es
+überträgt „gleiche Zeit, anderer Inhalt", also genau einen der Konfliktfälle.
+Bei beidseitiger Arbeit schickt es die jüngere Fassung und wirft die andere
+weg. Und geht die Uhr der Gegenstelle vor, überspringt es beim Hochladen alles
+und meldet Erfolg. Ein stiller Nichtlauf ist schlimmer als ein lauter Fehler.
 
 Prüfsummen kommen nur mit einem rsync 3.x mit. openrsync kennt das Feld nicht,
 dort läuft der Vergleich über Größe und Zeitstempel. Siehe [rsync.md](rsync.md).

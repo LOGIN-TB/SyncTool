@@ -282,8 +282,16 @@ struct GitUnitTests {
         #expect(status.report.settledRemote == 2)
         #expect(status.report.settledLocal == 1)
         #expect(status.report.settledRepositories == 1)
-        // Herausgerechnet gehen die Zahlen auf, der Unterschied ist erklärt.
-        #expect(!status.report.differsBeyondSettled)
+        // Und der Beleg dazu: Ausserhalb des Repos liegt kein einziger Pfad
+        // nur auf einer Seite. Erst das macht aus "der Unterschied liegt in
+        // den Repos" eine Aussage statt einer Behauptung.
+        #expect(!status.report.hasUnexplainedEntries)
+        #expect(status.report.unexplained.isEmpty)
+        // Die Repo-Zeilen addieren sich zur Gesamtdifferenz, die Anzeige ist
+        // damit nachrechenbar.
+        #expect(
+            status.report.settled.reduce(0) { $0 + $1.difference } == status.report.difference
+        )
     }
 
     @Test("Ein Unterschied ausserhalb der Repos bleibt offen")
@@ -297,7 +305,10 @@ struct GitUnitTests {
             lastSync: nil,
             settledGitBranches: ["P/.git/"]
         )
-        #expect(status.report.differsBeyondSettled)
+        #expect(status.report.hasUnexplainedEntries)
+        // Und benannt statt nur gezaehlt: Genau dieser Pfad ist gemeint.
+        #expect(status.report.unexplained.map(\.path) == ["nur-dort.txt"])
+        #expect(status.report.unexplained.first?.side == .remote)
         #expect(!status.isInSync)
     }
 

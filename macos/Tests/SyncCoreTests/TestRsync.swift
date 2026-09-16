@@ -28,4 +28,15 @@ enum TestRsync {
     static var threePath: String { three ?? "/opt/homebrew/bin/rsync" }
 
     static var hasThree: Bool { three != nil }
+
+    /// Alle Fassungen, die auf diesem Rechner zu haben sind.
+    ///
+    /// Fuer `@Test(arguments:)`: Ein Beleg, der nur mit einer der beiden
+    /// Fassungen gilt, ist keiner. Genau daran ist im Projekt schon mehr als
+    /// einmal ein Unterschied zwischen openrsync und rsync 3.x aufgefallen.
+    static let all: [String] = {
+        var found = [systemRsync]
+        if let three { found.append(three) }
+        return found
+    }()
 }

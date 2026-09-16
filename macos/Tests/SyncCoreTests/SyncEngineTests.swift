@@ -18,6 +18,9 @@ private final class FakeRunner: RsyncExecuting, @unchecked Sendable {
     /// Aus demselben Grund: Inhalt der Ausschlussdatei je Lauf, oder "" wenn
     /// dieser Lauf keine hatte.
     var excludeContents: [String] = []
+    /// Und die Pfadliste des Inhaltslaufs, schon in ihre Eintraege zerlegt.
+    /// Leer, wenn dieser Lauf ohne Liste gestartet ist.
+    var filesFromContents: [[String]] = []
 
     func execute(_ plan: RsyncPlan, onLine: ((String) -> Void)?) async throws -> RsyncOutcome {
         plans.append(plan)
@@ -30,6 +33,19 @@ private final class FakeRunner: RsyncExecuting, @unchecked Sendable {
             excludeContents.append((try? String(contentsOfFile: path, encoding: .utf8)) ?? "")
         } else {
             excludeContents.append("")
+        }
+        if let argument = plan.arguments.first(where: { $0.hasPrefix("--files-from=") }) {
+            let path = String(argument.dropFirst("--files-from=".count))
+            let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+            filesFromContents.append(
+                text.split(separator: "\0").map {
+                    // Das `./` gehoert zur Schreibweise in der Datei, nicht zum
+                    // Pfad. Hier interessiert der Pfad.
+                    String($0.hasPrefix("./") ? $0.dropFirst(2) : $0)
+                }
+            )
+        } else {
+            filesFromContents.append([])
         }
         for line in lines { onLine?(line) }
         if !linesPerRun.isEmpty {
@@ -77,7 +93,14 @@ final class SyncEngineTests {
             user: "u1",
             remotePath: "dev",
             // Key-Modus, damit kein Passwort-Socket noetig ist.
-            authMode: .publicKey
+            authMode: .publicKey,
+            // Ohne Sicherungen: Hier steht ein eingesetzter Runner statt rsync,
+            // aber hinter `example.org` sitzt niemand. Das Wegraeumen alter
+            // Sicherungen redet als einziger Schritt wirklich mit der
+            // Gegenstelle und liefe in seinen Zeitablauf, ohne dass einer
+            // dieser Tests etwas davon haette. Geprueft wird es da, wo ein
+            // echtes rsync laeuft: in `VersionFolderEngineTests`.
+            backupKeepDays: 0
         )
     }
 
@@ -242,6 +265,285 @@ final class SyncEngineTests {
             includeDeletes: false, expectedItems: 0, rsyncPath: "/usr/bin/rsync"
         )
         #expect(store.load().lastSync(for: profile) != nil)
+    }
+
+    @Test("Gespeichert wird der Prüfzeitpunkt, nicht das Ende des Laufs")
+    func transferRecordsTheCheckTime() async throws {
+        let store = SyncStateStore(url: support.appendingPathComponent("state.json"))
+        let engine = SyncEngine(
+            runner: runner,
+            stateStore: store,
+            knownHosts: support.appendingPathComponent("known_hosts"),
+            identity: support.appendingPathComponent("id_ed25519")
+        )
+        // Was zwischen Pruefung und Laufende geschrieben wird, hat dieser Lauf
+        // nicht gesehen. Stuende hier die Endzeit, gaelte es trotzdem als
+        // abgeglichen und koennte nie wieder ein Konflikt werden.
+        let geprueft = Date(timeIntervalSince1970: 1_000_000)
+
+        runner.outcomes = [outcome([])]
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 0, checkedAt: geprueft,
+            rsyncPath: "/usr/bin/rsync"
+        )
+        #expect(store.load().lastSync(for: profile) == geprueft)
+    }
+
+    @Test("Ein gescheiterter Lauf lässt den letzten Abgleich stehen")
+    func failedTransferKeepsTheSyncTime() async throws {
+        let store = SyncStateStore(url: support.appendingPathComponent("state.json"))
+        let engine = SyncEngine(
+            runner: runner,
+            stateStore: store,
+            knownHosts: support.appendingPathComponent("known_hosts"),
+            identity: support.appendingPathComponent("id_ed25519")
+        )
+        let frueher = Date(timeIntervalSince1970: 1_000_000)
+        store.recordSync(for: profile, at: frueher)
+
+        runner.outcomes = [
+            RsyncOutcome(status: 12, items: [], errorLines: ["kaputt"], statsLines: [])
+        ]
+        await #expect(throws: (any Error).self) {
+            _ = try await engine.transfer(
+                profile: self.profile, password: nil, direction: .push,
+                includeDeletes: false, expectedItems: 0, rsyncPath: "/usr/bin/rsync"
+            )
+        }
+
+        // Rueckt der Zeitpunkt trotz Fehlschlag vor, liegt jede Aenderung von
+        // davor vor dem letzten Abgleich. `DriftResolver` meldet dann keinen
+        // beidseitigen Konflikt mehr, sondern laesst den juengeren Zeitstempel
+        // gewinnen, und die andere Fassung ist beim naechsten Lauf weg.
+        #expect(store.load().lastSync(for: profile) == frueher)
+    }
+
+    @Test("Ohne vorherigen Abgleich hinterlässt ein Fehlschlag keinen Zeitpunkt")
+    func failedTransferRecordsNothingAtAll() async throws {
+        let store = SyncStateStore(url: support.appendingPathComponent("state.json"))
+        let engine = SyncEngine(
+            runner: runner,
+            stateStore: store,
+            knownHosts: support.appendingPathComponent("known_hosts"),
+            identity: support.appendingPathComponent("id_ed25519")
+        )
+        runner.outcomes = [
+            RsyncOutcome(status: 12, items: [], errorLines: ["kaputt"], statsLines: [])
+        ]
+        await #expect(throws: (any Error).self) {
+            _ = try await engine.transfer(
+                profile: self.profile, password: nil, direction: .push,
+                includeDeletes: false, expectedItems: 0, rsyncPath: "/usr/bin/rsync"
+            )
+        }
+        #expect(store.load().lastSync(for: profile) == nil)
+    }
+
+    @Test("Auf einem unvollständigen Bestand wird nicht gelöscht")
+    func incompleteInventoryBlocksDeletes() async throws {
+        profile.deleteAllowed = true
+        await #expect(throws: SyncEngineError.self) {
+            _ = try await self.engine.transfer(
+                profile: self.profile, password: nil, direction: .push,
+                includeDeletes: true, expectedItems: 0,
+                rsyncPath: "/usr/bin/rsync", inventoryComplete: false
+            )
+        }
+        // Vor jeder Anmeldung: Der Lauf startet gar nicht erst.
+        #expect(runner.plans.isEmpty)
+    }
+
+    @Test("Ohne Löschen läuft derselbe Bestand durch")
+    func incompleteInventoryStillAllowsTransfer() async throws {
+        profile.deleteAllowed = true
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 0,
+            rsyncPath: "/usr/bin/rsync", inventoryComplete: false
+        )
+        #expect(runner.plans.count == 1)
+    }
+
+    // MARK: - Die Übertragung folgt der Prüfung
+
+    @Test("Der Inhaltslauf überträgt genau die gemessenen Pfade")
+    func contentRunCarriesExactlyTheMeasuredPaths() async throws {
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 2,
+            rsyncPath: "/usr/bin/rsync",
+            transferPaths: ["eins.txt", "unter/zwei.txt"]
+        )
+        #expect(runner.filesFromContents.first == ["eins.txt", "unter/zwei.txt"])
+        #expect(runner.plans.first?.arguments.contains("--from0") == true)
+    }
+
+    /// Der Kern der Sache: Ein Konfliktpfad steht in keiner der beiden Listen
+    /// und wird deshalb von keinem Lauf angefasst. Frueher ging der volle Baum
+    /// hinueber und machte ihn einseitig platt.
+    @Test("Was nicht in der Liste steht, fasst der Lauf nicht an")
+    func pathsOutsideTheListAreNeverTouched() async throws {
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 1,
+            rsyncPath: "/usr/bin/rsync",
+            transferPaths: ["meins.txt"]
+        )
+        let liste = try #require(runner.filesFromContents.first)
+        #expect(!liste.contains("streit.txt"))
+        #expect(liste == ["meins.txt"])
+    }
+
+    @Test("Ohne Pfade in dieser Richtung startet kein Inhaltslauf")
+    func noPathsMeansNoContentRun() async throws {
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 0,
+            rsyncPath: "/usr/bin/rsync",
+            transferPaths: []
+        )
+        #expect(runner.plans.isEmpty)
+    }
+
+    /// Ohne Messung bleibt es beim alten Verhalten. Sonst uebertruege ein
+    /// Aufruf ohne vorherige Pruefung gar nichts mehr.
+    @Test("Ohne Messung geht wie bisher der ganze Baum")
+    func withoutAMeasurementTheWholeTreeGoes() async throws {
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 0, rsyncPath: "/usr/bin/rsync"
+        )
+        #expect(runner.plans.count == 1)
+        #expect(runner.plans[0].arguments.contains { $0.hasPrefix("--files-from") } == false)
+    }
+
+    @Test("Gelöscht wird in einem eigenen Lauf nach dem Inhalt")
+    func deletingIsItsOwnRunAfterTheContent() async throws {
+        profile.deleteAllowed = true
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: true, expectedDeletions: 1, expectedItems: 1,
+            rsyncPath: "/usr/bin/rsync",
+            transferPaths: ["eins.txt"]
+        )
+        #expect(runner.plans.count == 2)
+        // Der erste traegt die Liste und loescht nicht.
+        #expect(runner.plans[0].arguments.contains { $0.hasPrefix("--files-from") })
+        #expect(!runner.plans[0].arguments.contains("--delete"))
+        // Der zweite raeumt auf und uebertraegt nichts.
+        #expect(runner.plans[1].arguments.contains("--delete"))
+        #expect(runner.plans[1].arguments.contains("--delete-after"))
+        #expect(runner.plans[1].arguments.contains("--existing"))
+        #expect(runner.plans[1].arguments.contains("--ignore-existing"))
+        #expect(!runner.plans[1].arguments.contains { $0.hasPrefix("--files-from") })
+    }
+
+    @Test("Ohne Löschungen entfällt der zweite Lauf")
+    func withoutDeletesThereIsNoSecondRun() async throws {
+        profile.deleteAllowed = true
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 1,
+            rsyncPath: "/usr/bin/rsync",
+            transferPaths: ["eins.txt"]
+        )
+        #expect(runner.plans.count == 1)
+    }
+
+    /// Nur geloescht, nichts uebertragen: Der Inhaltslauf entfaellt, der
+    /// Loeschlauf laeuft trotzdem.
+    @Test("Ein Lauf, der nur aufräumt, kommt ohne Inhaltslauf aus")
+    func aRunThatOnlyDeletesSkipsTheContentRun() async throws {
+        profile.deleteAllowed = true
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: true, expectedDeletions: 1, expectedItems: 0,
+            rsyncPath: "/usr/bin/rsync",
+            transferPaths: []
+        )
+        #expect(runner.plans.count == 1)
+        #expect(runner.plans[0].arguments.contains("--delete"))
+    }
+
+    // MARK: - Die Notbremse des Hauptlaufs
+
+    @Test("Erreicht der Hauptlauf die Löschgrenze, bricht die Maschine ab")
+    func mainRunStopsAtTheDeleteLimit() async throws {
+        profile.deleteAllowed = true
+        profile.maxDelete = 100
+        // openrsync meldete hier Status 0 und haette still aufgehoert zu
+        // loeschen. Erkannt wird das nur, indem die Loeschzeilen nachgezaehlt
+        // werden.
+        let removals = (0..<100).map { item("weg/\($0).txt", offset: 0, kind: .deleted) }
+        runner.outcomes = [outcome(removals)]
+
+        await #expect(throws: SyncEngineError.self) {
+            _ = try await self.engine.transfer(
+                profile: self.profile, password: nil, direction: .push,
+                includeDeletes: true, expectedItems: 0,
+                remotePaths: ["a.txt"], localPaths: ["a.txt"],
+                rsyncPath: "/usr/bin/rsync"
+            )
+        }
+        #expect(inventoryStore.load(for: profile)?.paths == ["a.txt"])
+    }
+
+    @Test("Mehr Löschungen als angekündigt brechen ab, auch unter maxDelete")
+    func mainRunStopsAboveTheAnnouncedCount() async throws {
+        profile.deleteAllowed = true
+        profile.maxDelete = 1000
+        // Angekuendigt waren 3, erlaubt sind damit 3 + 50. Ohne die zweite
+        // Grenze liefen hier 60 Loeschungen unbemerkt durch, obwohl der Nutzer
+        // im Ruecksprachefenster drei Pfade gesehen und bestaetigt hat.
+        let removals = (0..<53).map { item("weg/\($0).txt", offset: 0, kind: .deleted) }
+        runner.outcomes = [outcome(removals)]
+
+        await #expect(throws: SyncEngineError.self) {
+            _ = try await self.engine.transfer(
+                profile: self.profile, password: nil, direction: .push,
+                includeDeletes: true, expectedDeletions: 3, expectedItems: 0,
+                remotePaths: ["a.txt"], localPaths: ["a.txt"],
+                rsyncPath: "/usr/bin/rsync"
+            )
+        }
+    }
+
+    @Test("Die angekündigte Zahl steht als Anschlag in der Kommandozeile")
+    func theAnnouncedCountReachesRsync() async throws {
+        profile.deleteAllowed = true
+        profile.maxDelete = 1000
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: true, expectedDeletions: 3, expectedItems: 0,
+            rsyncPath: "/usr/bin/rsync"
+        )
+        #expect(runner.plans.first?.arguments.contains("--max-delete=53") == true)
+    }
+
+    @Test("Ohne gemessene Löschzahl bleibt es beim Anschlag aus dem Profil")
+    func withoutAMeasurementTheProfileLimitStands() async throws {
+        profile.deleteAllowed = true
+        profile.maxDelete = 100
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: true, expectedItems: 0,
+            rsyncPath: "/usr/bin/rsync"
+        )
+        #expect(runner.plans.first?.arguments.contains("--max-delete=100") == true)
+    }
+
+    @Test("Ohne Löschen zählt kein Anschlag mit")
+    func withoutDeletesNoLimitApplies() async throws {
+        // Ein Lauf ohne `--delete` kann keine Loeschzeilen erzeugen. Kaeme
+        // trotzdem eine, waere das kein Grund abzubrechen.
+        let removals = (0..<200).map { item("weg/\($0).txt", offset: 0, kind: .deleted) }
+        runner.outcomes = [outcome(removals)]
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: false, expectedDeletions: 1, expectedItems: 0,
+            rsyncPath: "/usr/bin/rsync"
+        )
     }
 
     // MARK: - Git-Repos als Einheit

@@ -25,8 +25,8 @@ struct DriftResolverTests {
         )
     }
 
-    private func side(_ entries: [InventoryEntry]) -> SideInventory {
-        InventoryBuilder.build(from: entries)
+    private func side(_ entries: [InventoryEntry], complete: Bool = true) -> SideInventory {
+        InventoryBuilder.build(from: entries, isComplete: complete)
     }
 
     private func resolve(
@@ -310,5 +310,61 @@ struct DriftResolverTests {
         #expect(status.isInSync)
         #expect(status.incomingBytes == 0)
         #expect(status.outgoingBytes == 0)
+    }
+
+    // MARK: - Unvollständige Bestandsläufe
+
+    /// rsync-Status 24 heisst: Waehrend der Auflistung sind Dateien
+    /// verschwunden. Die Liste ist dann zu kurz, und jeder fehlende Eintrag
+    /// sieht aus wie ein geloeschter. Genau daraus duerfen keine Loeschungen
+    /// werden.
+    @Test("Ein unvollständiger Fernbestand meldet keine Löschungen hier")
+    func incompleteRemoteSuppressesLocalDeletions() {
+        let status = DriftResolver.resolve(
+            remote: side([], complete: false),
+            local: side([entry("datei.txt", offset: -600)]),
+            lastSync: base,
+            knownPaths: ["datei.txt"]
+        )
+        #expect(status.deletionsOnPull.isEmpty)
+        // Und der Pfad taucht auch sonst nirgends auf: Was wir nicht wissen,
+        // schlagen wir nicht vor.
+        #expect(status.outgoing.isEmpty)
+        #expect(!status.inventoryComplete)
+    }
+
+    @Test("Ein unvollständiger lokaler Bestand meldet keine Löschungen drüben")
+    func incompleteLocalSuppressesRemoteDeletions() {
+        let status = DriftResolver.resolve(
+            remote: side([entry("datei.txt", offset: -600)]),
+            local: side([], complete: false),
+            lastSync: base,
+            knownPaths: ["datei.txt"]
+        )
+        #expect(status.deletionsOnPush.isEmpty)
+        #expect(status.incoming.isEmpty)
+        #expect(!status.inventoryComplete)
+    }
+
+    /// Die Sperre gilt nur fuer Loeschungen. Was neu ist, darf weiter wandern:
+    /// Eine Datei zu viel zu uebertragen ist der harmlose Fehler.
+    @Test("Neue Dateien wandern auch aus einem unvollständigen Bestand")
+    func incompleteInventoryStillReportsNewFiles() {
+        let status = DriftResolver.resolve(
+            remote: side([entry("neu.txt", offset: 600)], complete: false),
+            local: side([]),
+            lastSync: base,
+            knownPaths: []
+        )
+        #expect(status.incoming.map(\.path) == ["neu.txt"])
+        #expect(status.deletionsOnPush.isEmpty)
+    }
+
+    @Test("Zwei saubere Läufe melden den Bestand als vollständig")
+    func twoCleanRunsAreComplete() {
+        let status = DriftResolver.resolve(
+            remote: side([entry("a.txt")]), local: side([entry("a.txt")]), lastSync: base
+        )
+        #expect(status.inventoryComplete)
     }
 }

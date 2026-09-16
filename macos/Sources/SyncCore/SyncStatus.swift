@@ -109,6 +109,13 @@ public struct SyncStatus: Sendable {
     /// Bestandsliste fort, deshalb hängen sie am Ergebnis der Prüfung.
     public let remotePaths: Set<String>
     public let localPaths: Set<String>
+    /// Liefen beide Bestandslaeufe sauber durch?
+    ///
+    /// `false` heisst: Waehrend der Pruefung haben sich Dateien bewegt, und
+    /// mindestens eine der beiden Listen ist unvollstaendig. Ein Lauf mit
+    /// Loeschen kommt auf dieser Grundlage nicht in Frage, denn eine fehlende
+    /// Datei sieht genauso aus wie eine geloeschte.
+    public let inventoryComplete: Bool
 
     public var isInSync: Bool {
         incoming.isEmpty && outgoing.isEmpty && conflicts.isEmpty
@@ -146,7 +153,8 @@ public struct SyncStatus: Sendable {
             gitUnits: gitUnits.map { $0.resolved(with: results[$0.root]) },
             report: report,
             remotePaths: remotePaths,
-            localPaths: localPaths
+            localPaths: localPaths,
+            inventoryComplete: inventoryComplete
         )
     }
 
@@ -184,7 +192,8 @@ public struct SyncStatus: Sendable {
         gitUnits: [GitUnit] = [],
         report: InventoryReport = InventoryReport(),
         remotePaths: Set<String> = [],
-        localPaths: Set<String> = []
+        localPaths: Set<String> = [],
+        inventoryComplete: Bool = true
     ) {
         self.checkedAt = checkedAt
         self.lastSync = lastSync
@@ -197,6 +206,7 @@ public struct SyncStatus: Sendable {
         self.report = report
         self.remotePaths = remotePaths
         self.localPaths = localPaths
+        self.inventoryComplete = inventoryComplete
     }
 }
 
@@ -236,6 +246,12 @@ public enum DriftResolver {
                 // Stand der Pfad beim letzten Abgleich schon da, wurde er hier
                 // geloescht und gehoert nicht ins Herunterladen.
                 if existedAtLastSync(entry, knownPaths: knownPaths, lastSync: lastSync) {
+                    // "Fehlt hier" steht und faellt mit der lokalen Liste. Ist
+                    // die unvollstaendig, waere das eine Loeschung auf Verdacht,
+                    // und der Verdacht ist an dieser Stelle nicht gut genug.
+                    // Der Pfad wandert in keine andere Liste: Was wir nicht
+                    // wissen, schlagen wir auch nicht vor.
+                    guard local.isComplete else { continue }
                     deletionsOnPush.append(deletion(entry))
                 } else {
                     incoming.append(drift(entry, reason: .onlyRemote, remote: entry, local: nil))
@@ -243,6 +259,9 @@ public enum DriftResolver {
             case (nil, let entry?):
                 if entry.isDirectory && local.hasChildren(of: path) { continue }
                 if existedAtLastSync(entry, knownPaths: knownPaths, lastSync: lastSync) {
+                    // Dasselbe umgekehrt: "drueben geloescht" steht und faellt
+                    // mit der Liste der Gegenseite.
+                    guard remote.isComplete else { continue }
                     deletionsOnPull.append(deletion(entry))
                 } else {
                     outgoing.append(drift(entry, reason: .onlyLocal, remote: nil, local: entry))
@@ -308,7 +327,8 @@ public enum DriftResolver {
                 settledBranches: settledGitBranches
             ),
             remotePaths: remote.paths,
-            localPaths: local.paths
+            localPaths: local.paths,
+            inventoryComplete: remote.isComplete && local.isComplete
         )
     }
 

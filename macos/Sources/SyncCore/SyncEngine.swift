@@ -21,6 +21,8 @@ public enum SyncEngineError: LocalizedError {
     case invalidProfile([String])
     case remotePathMissing(String)
     case gitDeleteLimit(limit: Int)
+    case deleteLimit(limit: Int, direction: SyncDirection)
+    case incompleteInventory
 
     public var errorDescription: String? {
         switch self {
@@ -32,6 +34,17 @@ public enum SyncEngineError: LocalizedError {
             return "In den Git-Repos standen mehr als \(limit) Löschungen an. "
                 + "Mindestens ein .git ist deshalb nur halb übertragen. "
                 + "Noch einmal prüfen und den Lauf wiederholen."
+        case .incompleteInventory:
+            return "Während der Prüfung haben sich Dateien bewegt, die Bestandsliste "
+                + "ist deshalb unvollständig. Auf dieser Grundlage wird nichts gelöscht: "
+                + "Eine Datei, die beim Auflisten verschwand, sieht genauso aus wie eine "
+                + "gelöschte. Noch einmal prüfen."
+        case .deleteLimit(let limit, let direction):
+            let seite = direction == .pull ? "hier" : "auf der Gegenstelle"
+            return "Der Lauf hat die Grenze von \(limit) Löschungen erreicht. "
+                + "Es wurde weniger \(seite) entfernt als angekündigt, beide Seiten "
+                + "stehen deshalb auf einem Mischzustand. Noch einmal prüfen und "
+                + "nachsehen, warum so viel zum Löschen anstand."
         }
     }
 }
@@ -271,7 +284,13 @@ public final class SyncEngine {
             }
         }
         try verify(outcome, profile: profile, side: options.side)
-        return InventoryBuilder.build(from: entries)
+        // Status 24 laesst `verify` durch, und das ist richtig: In einem
+        // Entwicklungsordner bewegt sich staendig etwas, und deshalb den
+        // ganzen Lauf abzubrechen hiesse, die App unbenutzbar zu machen. Die
+        // Liste ist dann aber unvollstaendig, und das muss mitwandern: Ein
+        // Eintrag, der waehrend der Auflistung verschwand, sieht hinterher aus
+        // wie einer, den jemand geloescht hat.
+        return InventoryBuilder.build(from: entries, isComplete: outcome.succeeded)
     }
 
     /// Ein Bestandslauf, der nicht sauber durchlief, liefert eine unvollstaendige
@@ -293,6 +312,35 @@ public final class SyncEngine {
     /// Zuschlag auf die gemessene Zahl der Loeschungen im Git-Lauf.
     /// Zwischen Pruefen und Uebertragen bewegt sich etwas.
     private static let gitDeleteMargin = 50
+
+    /// Derselbe Zuschlag fuer den Hauptlauf.
+    private static let deleteMargin = 50
+
+    /// Hat der Lauf so viel geloescht, wie er hoechstens durfte?
+    ///
+    /// openrsync bricht an `--max-delete` nicht ab, es hoert still auf zu
+    /// loeschen und meldet Erfolg. Ein Lauf, der 5.000 Eintraege wegraeumen
+    /// wollte, raeumt dann 100 weg, und beide Seiten stehen danach auf einem
+    /// Mischzustand, von dem niemand etwas erfaehrt. Gezaehlt wird deshalb
+    /// nach. rsync 3.x bricht von sich aus mit Status 25 ab, dort faellt das
+    /// schon vorher auf; die Zaehlung schadet ihm nicht.
+    private func reachedDeleteLimit(_ outcome: RsyncOutcome, limit: Int) -> Bool {
+        outcome.items.count { $0.kind == .deleted } >= limit
+    }
+
+    /// Die Notbremse des Hauptlaufs.
+    ///
+    /// Zwei Anschlaege, der kleinere gilt. `profile.maxDelete` ist die absolute
+    /// Grenze und sagt nichts ueber diesen Lauf. Die gemessene Zahl plus
+    /// Zuschlag ist die Zusage, die das Statusfenster dem Nutzer gemacht hat:
+    /// Wer dort "17 Dateien löschen?" bestaetigt, hat nicht 100 erlaubt.
+    ///
+    /// Ohne gemessene Zahl bleibt es beim Anschlag aus dem Profil, genau wie
+    /// beim Git-Lauf.
+    private func deleteLimit(expected: Int?, profile: Profile) -> Int {
+        guard let expected else { return profile.maxDelete }
+        return min(profile.maxDelete, expected + Self.deleteMargin)
+    }
 
     /// Die Notbremse des Git-Laufs, aus den gemessenen Bestaenden gerechnet.
     ///
@@ -326,6 +374,9 @@ public final class SyncEngine {
         password: String?,
         direction: SyncDirection,
         includeDeletes: Bool,
+        /// Wie viele Loeschungen die Pruefung angekuendigt hat. `nil` heisst:
+        /// nicht gemessen, dann bleibt es beim Anschlag aus dem Profil.
+        expectedDeletions: Int? = nil,
         protectedPaths: [String] = [],
         expectedItems: Int,
         /// Die Git-Repos aus der Pruefung. Was in diese Richtung laeuft, geht im
@@ -335,11 +386,35 @@ public final class SyncEngine {
         /// gemeinsame Bestand, statt ihn aus dem lokalen Baum zu raten.
         remotePaths: Set<String> = [],
         localPaths: Set<String> = [],
+        /// Wann die Pruefung lief, auf der dieser Lauf beruht. `nil` heisst:
+        /// unbekannt, dann zaehlt der Zeitpunkt des Laufs.
+        checkedAt: Date? = nil,
         rsyncPath: String,
+        /// `false` bei openrsync: die Fassung vertraegt `-b` und `--delete`
+        /// nicht in derselben Zeile. Siehe `Options.backupFlags`.
+        supportsBackupWhileDeleting: Bool = true,
+        /// Liefen die Bestandslaeufe der zugrundeliegenden Pruefung sauber
+        /// durch? Auf einer luckenhaften Liste wird nicht geloescht.
+        inventoryComplete: Bool = true,
+        /// Genau die Pfade, die dieser Lauf uebertragen soll: `incoming` beim
+        /// Herunterladen, `outgoing` beim Hochladen. Konflikte stehen in keiner
+        /// der beiden Listen und bleiben dadurch unberuehrt.
+        ///
+        /// `nil` heisst: nicht gemessen, dann geht der ganze Baum wie frueher.
+        /// Ein leeres Feld heisst: gemessen, und es ist nichts zu uebertragen.
+        /// Der Unterschied ist wichtig, sonst uebertruege ein Lauf ohne
+        /// Messung gar nichts mehr.
+        transferPaths: [String]? = nil,
         onLog: ((String) -> Void)? = nil,
         onProgress: ((TransferProgress) -> Void)? = nil
     ) async throws -> RsyncOutcome {
         try validate(profile)
+        // Die Sperre haengt nicht am Haken im Statusfenster, sondern hier:
+        // Eine unvollstaendige Bestandsliste ist keine Grundlage, auf der
+        // geloescht werden darf, egal wer den Lauf ausloest.
+        if includeDeletes, profile.deleteAllowed, !inventoryComplete {
+            throw SyncEngineError.incompleteInventory
+        }
         // Vor der Anmeldung, nicht danach: der Abbruch kostet so keine
         // Verbindung und keine Wartezeit.
         try guardTarget(
@@ -359,14 +434,18 @@ public final class SyncEngine {
 
         let context = try prepare(
             session: session, profile: profile, protectedPaths: protectedPaths,
-            skippedBranches: skipped, gitBranches: mirrored
+            skippedBranches: skipped, gitBranches: mirrored, transferPaths: transferPaths
         )
         defer { context.cleanup() }
 
-        let deleteLimit = gitDeleteLimit(
+        let gitLimit = gitDeleteLimit(
             mirrored: mirrored, direction: direction,
             remotePaths: remotePaths, localPaths: localPaths, profile: profile
         )
+        let mainLimit = deleteLimit(expected: expectedDeletions, profile: profile)
+        // Ein Ordner je Lauf, beide Laeufe teilen ihn sich. Wer eine Fassung
+        // zurueckholen will, findet alles aus diesem Abgleich an einer Stelle.
+        let backupDir = profile.backupKeepDays > 0 ? VersionFolder.path() : nil
         let options = RsyncArguments.Options(
             dryRun: false,
             includeDeletes: includeDeletes,
@@ -376,7 +455,11 @@ public final class SyncEngine {
             endpoints: context.endpoints,
             flavour: context.flavour,
             gitFilterFile: context.gitFilterFile,
-            gitMaxDelete: deleteLimit
+            gitMaxDelete: gitLimit,
+            maxDelete: mainLimit,
+            backupDir: backupDir,
+            supportsBackupWhileDeleting: supportsBackupWhileDeleting,
+            filesFromFile: context.filesFromFile
         )
 
         var completed = 0
@@ -395,8 +478,22 @@ public final class SyncEngine {
         /// Schreibt den gemeinsamen Bestand fort. Bei einem Fehlschlag bleibt
         /// nur die Schnittmenge uebrig, sonst gaelte ein nie angekommener Pfad
         /// beim naechsten Pruefen als hier geloescht.
+        ///
+        /// Der letzte Abgleich rueckt nur nach einem Lauf vor, der durchlief.
+        /// Frueher stand er auch nach einem Abbruch auf jetzt, und damit war
+        /// `DriftResolver` blind: Jede Aenderung von vor dem Fehlschlag lag
+        /// dann vor dem letzten Abgleich, ein echter beidseitiger Konflikt
+        /// wurde nicht mehr als solcher erkannt, und statt einer Rueckfrage
+        /// entschied stillschweigend der juengere Zeitstempel.
+        ///
+        /// Gespeichert wird der Zeitpunkt der Pruefung, nicht der des
+        /// Laufendes. Was waehrend der Uebertragung geschrieben wurde, hat
+        /// dieser Lauf nicht gesehen; mit `Date()` gaelte es als abgeglichen
+        /// und koennte nie mehr ein Konflikt werden. Der Pruefzeitpunkt ist
+        /// die vorsichtige Richtung, er erzeugt im Zweifel einen Konflikt zu
+        /// viel statt einen zu wenig.
         func record(succeeded: Bool) {
-            stateStore.recordSync(for: profile)
+            if succeeded { stateStore.recordSync(for: profile, at: checkedAt ?? Date()) }
             inventoryStore.record(
                 for: profile,
                 commonPaths: SyncInventory.afterTransfer(
@@ -412,21 +509,73 @@ public final class SyncEngine {
             )
         }
 
-        var outcome: RsyncOutcome
-        do {
-            outcome = try await run(
-                arguments: RsyncArguments.arguments(
-                    profile: profile, direction: direction, options: options
-                ),
-                direction: direction,
-                remotePath: profile.remotePath,
-                rsyncPath: rsyncPath,
-                environment: context.environment,
-                onLog: onLog,
-                onLine: report
+        if backupDir != nil, includeDeletes, profile.deleteAllowed,
+            !supportsBackupWhileDeleting
+        {
+            onLog?(
+                "Dieser Lauf löscht und sichert deshalb nichts weg: openrsync "
+                    + "hört mit Sicherungen still auf zu löschen. "
+                    + "Mit `brew install rsync` gibt es beides zusammen."
             )
+        }
 
-            // Erst der Hauptlauf, dann die Repos. Bricht etwas dazwischen ab,
+        // Ein Lauf ohne Inhalt ist kein Fehler: Es kann sein, dass in dieser
+        // Richtung nur geloescht wird oder nur ein Repo ansteht.
+        let hasContent = transferPaths.map { !$0.isEmpty } ?? true
+        let deletes = includeDeletes && profile.deleteAllowed
+
+        var outcome = RsyncOutcome(status: 0, items: [], errorLines: [], statsLines: [])
+        do {
+            if hasContent {
+                outcome = try await run(
+                    arguments: RsyncArguments.arguments(
+                        profile: profile, direction: direction, options: options
+                    ),
+                    direction: direction,
+                    remotePath: profile.remotePath,
+                    rsyncPath: rsyncPath,
+                    environment: context.environment,
+                    onLog: onLog,
+                    onLine: report
+                )
+            }
+
+            // Erst der Inhalt, dann das Aufraeumen. Eine umbenannte Datei geht
+            // so zuerst unter dem neuen Namen hinueber und faellt danach unter
+            // dem alten weg; zu keinem Zeitpunkt fehlt sie auf der Gegenseite.
+            //
+            // Ein eigener Lauf, sobald es eine Messung gibt. Bewusst nicht an
+            // `context.filesFromFile` festgemacht: Steht in dieser Richtung
+            // nichts zu uebertragen an, gibt es keine Datei, und der Lauf, der
+            // nur aufraeumen soll, fiele stillschweigend aus. Ohne Messung
+            // traegt der Lauf darueber sein `--delete` noch selbst, wie frueher.
+            if deletes, transferPaths != nil {
+                onLog?("Aufräumen")
+                let deleteOutcome = try await run(
+                    arguments: RsyncArguments.deleteArguments(
+                        profile: profile, direction: direction, options: options
+                    ),
+                    direction: direction,
+                    remotePath: profile.remotePath,
+                    rsyncPath: rsyncPath,
+                    environment: context.environment,
+                    onLog: onLog,
+                    onLine: report
+                )
+                outcome = merged(outcome, deleteOutcome)
+            }
+
+            // openrsync haelt an `--max-delete` nicht an, es hoert still auf zu
+            // loeschen. Nachgezaehlt wird deshalb auch hier und nicht nur im
+            // Git-Lauf: sonst meldet ein Lauf, der 5.000 Eintraege wegraeumen
+            // wollte und 100 wegraeumte, einen Erfolg, und beide Seiten stehen
+            // danach auf einem Mischzustand.
+            if deletes, reachedDeleteLimit(outcome, limit: mainLimit) {
+                record(succeeded: false)
+                throw SyncEngineError.deleteLimit(limit: mainLimit, direction: direction)
+            }
+
+            // Danach die Repos. Bricht etwas dazwischen ab,
             // bleibt das `.git` der Empfaengerseite auf seinem alten, in sich
             // stimmigen Stand. Andersherum zeigten neue Refs auf eine alte
             // Arbeitskopie, und das sieht nach verlorener Arbeit aus.
@@ -448,10 +597,9 @@ public final class SyncEngine {
                 // openrsync bricht an `--max-delete` nicht ab, es hoert still
                 // auf zu loeschen. Genau dann bleibt ein halbes `.git` liegen,
                 // deshalb wird hier nachgezaehlt.
-                let removed = gitOutcome.items.count { $0.kind == .deleted }
-                if removed >= deleteLimit {
+                if reachedDeleteLimit(gitOutcome, limit: gitLimit) {
                     record(succeeded: false)
-                    throw SyncEngineError.gitDeleteLimit(limit: deleteLimit)
+                    throw SyncEngineError.gitDeleteLimit(limit: gitLimit)
                 }
             }
         } catch {
@@ -460,7 +608,101 @@ public final class SyncEngine {
         }
 
         record(succeeded: outcome.succeeded || outcome.isWarningOnly)
+        // Nur wenn dieser Lauf etwas gesichert haben kann. Eine Sicherung
+        // entsteht beim Ersetzen und beim Loeschen, nicht bei einer neuen
+        // Datei: Dort ist nichts da, was wegzulegen waere. Ohne neue Sicherung
+        // ist auch nichts gewachsen, und die Runde zur Gegenstelle koennte nur
+        // Zeit kosten.
+        let hatGesichert = outcome.items.contains { $0.kind == .updated || $0.kind == .deleted }
+        if backupDir != nil, hatGesichert {
+            await sweepVersions(
+                profile: profile, session: session, direction: direction,
+                endpoints: context.endpoints, onLog: onLog
+            )
+        }
         return outcome
+    }
+
+    /// Raeumt Sicherungsordner weg, die aelter sind als das Profil erlaubt.
+    ///
+    /// Erst nach dem Lauf: Waere der Ordner dieses Laufs schon weg, bevor er
+    /// geschrieben ist, fiele die Sicherung aus, fuer die er da ist. Und
+    /// bewusst ohne `throws`: Ein Lauf, der die Daten uebertragen hat, gilt
+    /// nicht deshalb als gescheitert, weil hinterher ein alter Ordner
+    /// stehenblieb. Was nicht klappt, steht im Protokoll.
+    ///
+    /// Das Alter kommt aus dem Ordnernamen, nicht aus dem Dateisystem. Ueber
+    /// ssh gaebe es dafuer ein zweites Kommando, und ein Name, den diese App
+    /// geschrieben hat, traegt das Datum ohnehin. Was nicht nach einem eigenen
+    /// Ordner aussieht, bleibt unangetastet.
+    private func sweepVersions(
+        profile: Profile,
+        session: SSHSession?,
+        direction: SyncDirection,
+        endpoints: SyncEndpoints,
+        onLog: ((String) -> Void)?
+    ) async {
+        guard profile.backupKeepDays > 0 else { return }
+        // Gesichert wird auf der Empfaengerseite, also dort wird geraeumt.
+        let receiverIsRemote = direction == .push
+
+        do {
+            let names: [String]
+            if receiverIsRemote, let session {
+                let root = (remoteRoot(profile) as NSString)
+                    .appendingPathComponent(VersionFolder.root)
+                // `|| true`: Fehlt der Ordner, ist nichts zu raeumen, und das
+                // ist kein Fehler. `ls` allein liefe sonst auf Status 1.
+                let result = try await session.runRemote(
+                    "ls -1 \(SSHCommand.shellQuote(root)) 2>/dev/null || true",
+                    // Kuerzer als die Vorgabe: Die Daten liegen schon, das
+                    // Aufraeumen darf den Lauf nicht lange aufhalten. Was hier
+                    // nicht klappt, klappt beim naechsten Mal.
+                    timeout: 20
+                )
+                names = result.standardOutput.split(separator: "\n").map(String.init)
+            } else {
+                let root = URL(
+                    fileURLWithPath: receiverIsRemote ? endpoints.remote : endpoints.local
+                ).appendingPathComponent(VersionFolder.root)
+                names =
+                    (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
+            }
+
+            let expired = VersionFolder.expired(names, keepDays: profile.backupKeepDays)
+            guard !expired.isEmpty else { return }
+
+            if receiverIsRemote, let session {
+                let root = (remoteRoot(profile) as NSString)
+                    .appendingPathComponent(VersionFolder.root)
+                let paths = expired.map {
+                    SSHCommand.shellQuote((root as NSString).appendingPathComponent($0))
+                }
+                _ = try await session.runRemote(
+                    "rm -rf \(paths.joined(separator: " "))", timeout: 20
+                )
+            } else {
+                let root = URL(
+                    fileURLWithPath: receiverIsRemote ? endpoints.remote : endpoints.local
+                ).appendingPathComponent(VersionFolder.root)
+                for name in expired {
+                    try? FileManager.default.removeItem(
+                        at: root.appendingPathComponent(name)
+                    )
+                }
+            }
+            onLog?(
+                "\(expired.count) Sicherungsordner älter als "
+                    + "\(profile.backupKeepDays) Tage weggeräumt."
+            )
+        } catch {
+            onLog?("Alte Sicherungen ließen sich nicht wegräumen: \(error.localizedDescription)")
+        }
+    }
+
+    private func remoteRoot(_ profile: Profile) -> String {
+        profile.remotePath.hasSuffix("/")
+            ? String(profile.remotePath.dropLast()) : profile.remotePath
     }
 
     /// Fuegt die Ergebnisse beider Laeufe zusammen. Der schlechtere Status
@@ -525,6 +767,9 @@ public final class SyncEngine {
         /// Einschlussregeln des Git-Laufs. `nil` heisst: in dieser Richtung
         /// steht kein Repo an.
         let gitFilterFile: String?
+        /// Die Pfade, die der Inhaltslauf uebertragen soll. `nil` heisst:
+        /// keine Messung, dann geht der ganze Baum.
+        let filesFromFile: String?
         let environment: [String: String]
         let endpoints: SyncEndpoints
         let flavour: RsyncFlavour
@@ -572,7 +817,8 @@ public final class SyncEngine {
         profile: Profile,
         protectedPaths: [String] = [],
         skippedBranches: [String] = [],
-        gitBranches: [String] = []
+        gitBranches: [String] = [],
+        transferPaths: [String]? = nil
     ) throws -> RunContext {
         let remoteShell: String
         let directory: URL
@@ -592,18 +838,27 @@ public final class SyncEngine {
             ownsDirectory = true
         }
 
+        // Die eigenen Ordner zuerst, damit sie auch dann gelten, wenn der
+        // Nutzer seine Ausschlussliste leergeraeumt hat. Sie stehen damit auch
+        // in den Bestandslaeufen drin: Was die App selbst im Ziel ablegt,
+        // gehoert in keine der beiden Bestandszahlen.
         let excludeFile = try RsyncArguments.writeExcludeFile(
-            profile.excludes, branches: skippedBranches, in: directory
+            Profile.internalExcludes + profile.excludes,
+            branches: skippedBranches, in: directory
         )
         let protectFile = try RsyncArguments.writeProtectFile(protectedPaths, in: directory)
         let gitFilterFile = try RsyncArguments.writeGitFilterFile(
             branches: gitBranches, in: directory
         )
+        let filesFromFile = try transferPaths.flatMap {
+            try RsyncArguments.writeFilesFromFile($0, in: directory)
+        }
         return RunContext(
             remoteShell: remoteShell,
             excludeFile: excludeFile,
             protectFile: protectFile,
             gitFilterFile: gitFilterFile,
+            filesFromFile: filesFromFile,
             environment: environment,
             endpoints: SyncEndpoints.resolve(profile: profile),
             flavour: RsyncFlavour.forTransport(profile.transport),

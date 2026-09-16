@@ -129,6 +129,20 @@ struct RsyncArgumentsTests {
                 == "P /ordner/stern\\*name\\[1].txt\n"
         )
         #expect(try RsyncArguments.writeProtectFile([], in: directory) == nil)
+
+        // Der Backslash ist in rsyncs Filtersprache selbst das Maskierzeichen.
+        // Genau so sieht ein Pfad aus, den openrsync ohne `-8` ausgibt: bliebe
+        // der Backslash roh stehen, traefe die Regel den Dateinamen nicht mehr,
+        // und `--delete` raeumte die geschuetzte Datei weg.
+        let maskiert = try #require(
+            try RsyncArguments.writeProtectFile(
+                ["Ümläut \\#342\\#200\\#223 Test.txt"], in: directory
+            )
+        )
+        #expect(
+            try String(contentsOfFile: maskiert, encoding: .utf8)
+                == "P /Ümläut \\\\#342\\\\#200\\\\#223 Test.txt\n"
+        )
     }
 
     @Test("Ein Lauf mit Löschen bekommt immer die Notbremse mit")
@@ -419,6 +433,75 @@ struct RsyncArgumentsTests {
         )
         #expect(!args.contains("--delete"))
     }
+
+    // MARK: - Inhaltslauf und Löschlauf
+
+    /// Ohne das `./` liest rsync eine Zeile, die mit `#` oder `;` beginnt, als
+    /// Kommentar, und die Datei faellt still aus. Gemessen mit beiden Fassungen.
+    @Test("Jeder Eintrag der Pfadliste bekommt ./ vorangestellt")
+    func filesFromEntriesAreAnchored() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let file = try #require(
+            try RsyncArguments.writeFilesFromFile(["#raute.txt", "unter/a.txt"], in: directory)
+        )
+        let text = try String(contentsOfFile: file, encoding: .utf8)
+        #expect(text == "./#raute.txt\0./unter/a.txt\0")
+        // Kein `escape`: Hier steht ein Name, kein Muster.
+        let stern = try #require(
+            try RsyncArguments.writeFilesFromFile(["stern*name[1].txt"], in: directory)
+        )
+        #expect(try String(contentsOfFile: stern, encoding: .utf8) == "./stern*name[1].txt\0")
+        #expect(try RsyncArguments.writeFilesFromFile([], in: directory) == nil)
+    }
+
+    @Test("Der Inhaltslauf trägt nie --delete")
+    func theContentRunNeverDeletes() {
+        let profile = makeProfile(deleteAllowed: true)
+        var options = RsyncArguments.Options(
+            dryRun: false, includeDeletes: true, remoteShell: "/tmp/rsh"
+        )
+        options.filesFromFile = "/tmp/filesfrom"
+        let args = RsyncArguments.arguments(
+            profile: profile, direction: .push, options: options
+        )
+        #expect(args.contains("--files-from=/tmp/filesfrom"))
+        #expect(args.contains("--from0"))
+        #expect(!args.contains("--delete"))
+        #expect(!args.contains { $0.hasPrefix("--max-delete") })
+    }
+
+    @Test("Der Löschlauf überträgt nie")
+    func theDeleteRunNeverTransfers() {
+        let profile = makeProfile(deleteAllowed: true, maxDelete: 42)
+        let options = RsyncArguments.Options(
+            dryRun: false, includeDeletes: true, remoteShell: "/tmp/rsh"
+        )
+        let args = RsyncArguments.deleteArguments(
+            profile: profile, direction: .push, options: options
+        )
+        // Nichts anlegen, nichts ersetzen, nur raeumen.
+        #expect(args.contains("--existing"))
+        #expect(args.contains("--ignore-existing"))
+        #expect(args.contains("--delete"))
+        // Erst am Ende loeschen: Bricht der Lauf ab, hat die Empfaengerseite
+        // noch alle Daten statt Loecher.
+        #expect(args.contains("--delete-after"))
+        #expect(args.contains("--max-delete=42"))
+        #expect(!args.contains { $0.hasPrefix("--files-from") })
+    }
+
+    @Test("Ohne Pfadliste bleibt der Lauf, was er war")
+    func withoutAListNothingChanges() {
+        let profile = makeProfile(deleteAllowed: true, maxDelete: 7)
+        let args = arguments(
+            profile: profile, direction: .push, dryRun: false, includeDeletes: true
+        )
+        #expect(args.contains("--delete"))
+        #expect(args.contains("--max-delete=7"))
+        #expect(!args.contains { $0.hasPrefix("--files-from") })
+    }
 }
 
 @Suite("ssh-Optionen")
@@ -499,4 +582,5 @@ struct SSHCommandTests {
     func quotingSurvivesApostrophes() {
         #expect(SSHCommand.shellQuote("a'b") == "'a'\\''b'")
     }
+
 }

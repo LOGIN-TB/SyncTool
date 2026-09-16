@@ -2,6 +2,54 @@
 
 ## 1.5.0 (unveröffentlicht)
 
+### Datensicherheit
+
+- **Ein Lauf überträgt genau die Pfade, die die Prüfung seiner Richtung
+  zugeordnet hat.** Vorher war das ein voller rsync über den ganzen Baum: Wer
+  „Hochladen" drückte, überschrieb damit auch die neuere Fassung der
+  Gegenstelle mit der älteren von hier, und jeder gemeldete Konflikt wurde
+  einseitig plattgemacht, obwohl direkt daneben stand, dass genau das passiert.
+- **Konflikte bleiben unberührt.** Beide Fassungen bleiben, wo sie sind, bis
+  jemand entscheidet.
+- **Was ersetzt oder gelöscht wird, liegt 30 Tage unter
+  `.synctool-versionen/`** auf der Empfängerseite, mit demselben Pfad wie
+  vorher. Der Ordner ist vom Abgleich ausgenommen und vor `--delete` geschützt.
+  Mit openrsync gilt das nicht beim Löschen, siehe unten.
+- **Gelöscht wird in einem eigenen Lauf nach dem Inhalt**, mit `--existing
+  --ignore-existing --delete-after`. Eine umbenannte Datei geht so erst unter
+  dem neuen Namen hinüber und fällt danach unter dem alten weg.
+- **Der letzte Abgleich rückt nur nach einem Lauf vor, der durchlief.** Vorher
+  stand er auch nach einem Abbruch auf jetzt, und damit war die
+  Konflikterkennung für alles blind, was davor lag: Statt einer Rückfrage
+  entschied stillschweigend der jüngere Zeitstempel. Gespeichert wird jetzt der
+  Zeitpunkt der Prüfung, nicht der des Laufendes.
+- **Die Löschbremse gilt für jeden Lauf**, nicht nur für den Git-Lauf, und sie
+  hat einen zweiten Anschlag: die beim Prüfen gemessene Zahl plus 50. Wer „17
+  Dateien löschen?" bestätigt hat, hat nicht hundert erlaubt.
+- **Ein unvollständiger Bestandslauf erzeugt keine Löschungen mehr.** Sind
+  während der Auflistung Dateien verschwunden (rsync-Status 24), ist die Liste
+  zu kurz, und ein fehlender Eintrag sieht aus wie ein gelöschter. Übertragen
+  geht weiter, das Statusfenster sagt warum.
+- **openrsync löscht nicht, wenn gleichzeitig gesichert wird.** Kein Abbruch,
+  keine Meldung, Status 0. SyncTool lässt die Sicherung dort weg und löscht wie
+  zugesagt. Mit `brew install rsync` gibt es beides zusammen.
+- Schutz- und Filterregeln treffen jetzt auch Pfade mit Backslash. In rsyncs
+  Filtersprache ist er selbst das Maskierzeichen; eine Schutzregel für einen
+  solchen Namen ging vorher ins Leere, und `--delete` räumte genau die Datei
+  weg, die sie schützen sollte.
+
+### Statusfenster
+
+- **Das Fenster bleibt unter seinem Symbol**, auch wenn Abschnitte auf- und
+  zugeklappt werden. Vorher wanderte die Oberkante mit jeder Höhenänderung.
+- **Der Unterschied zwischen den beiden Bestandszahlen ist belegt statt
+  behauptet.** Vorher verglich die App zwei Zahlen: Zieh die Repos ab, dann
+  muss dieselbe Zahl übrigbleiben. Das ist keine Aussage, sondern eine Wette.
+  Lag eine Datei nur auf dem Server und eine andere nur hier, hoben sich die
+  beiden Abweichungen in der Rechnung auf, und die Anzeige behauptete, die
+  Differenz läge in den Repos. Jetzt steht je Repo die Zahl beider Seiten mit
+  ihrer Differenz da, und was das nicht erklärt, steht als Pfadliste darunter.
+
 ### Git-Repos
 
 - **`.git/` geht als Einheit über die Leitung.** Bisher wurde jede Datei darin

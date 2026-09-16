@@ -15,12 +15,59 @@ steht davor mehr als ein Häkchen.
 Fehlt eine davon, läuft der Abgleich ohne `--delete`. Dateien bleiben dann auf
 der Gegenseite liegen, und das ist der harmlose Fehler.
 
+## Löschen ist ein eigener Lauf
+
+Erst geht der Inhalt hinüber, dann wird geräumt. Der zweite Lauf trägt
+`--existing --ignore-existing`: Er legt nichts an und ersetzt nichts, er
+entfernt nur. So lässt sich jeder der beiden Schritte für sich beurteilen, und
+eine Entscheidung des Inhaltslaufs wird nicht nachträglich überschrieben.
+
+Die Reihenfolge ist Absicht. Eine umbenannte Datei geht zuerst unter dem neuen
+Namen hinüber und fällt danach unter dem alten weg. Zu keinem Zeitpunkt fehlt
+sie auf der Gegenseite.
+
+Geräumt wird mit `--delete-after` statt des voreingestellten
+`--delete-during`. Bricht der Lauf mittendrin ab, hat die Empfängerseite noch
+alle Daten. Vorher zu löschen hieße, im Abbruchfall Löcher zu hinterlassen.
+
+## Was ersetzt oder gelöscht wird, bleibt 30 Tage liegen
+
+Die Empfängerseite legt jede Datei, die ein Lauf ersetzt oder entfernt, unter
+`.synctool-versionen/<Datum-Uhrzeit>/` ab, mit demselben Pfad wie vorher. Der
+Ordner ist vom Abgleich ausgenommen, und ausgeschlossen heißt bei rsync
+zugleich vor `--delete` geschützt: Kein Lauf räumt die Sicherungen der
+Gegenseite weg.
+
+Nach 30 Tagen wird geräumt, die Zahl steht im Profil. `0` schaltet die
+Sicherungen ab. Das Alter kommt aus dem Ordnernamen, nicht aus dem Dateisystem;
+ein Ordner, den diese App nicht geschrieben hat, bleibt liegen.
+
+**Mit openrsync gibt es beim Löschen keine Sicherung.** Diese Fassung hört mit
+`-b --backup-dir` in derselben Zeile still auf zu löschen: kein Abbruch, keine
+Meldung, Status 0. SyncTool lässt die Sicherung dort weg und löscht wie
+zugesagt, denn ein Lauf, der sich anders verhält als angekündigt, ist der
+Anfang jedes Auseinanderlaufens. Mit `brew install rsync` gibt es beides
+zusammen. Siehe [rsync.md](rsync.md).
+
 ## Die Notbremse
 
 `--max-delete` bricht den Lauf ab, statt mehr Dateien zu entfernen als erlaubt.
-Die Zahl steht im Profil, Vorgabe 100. Sie ist kein Feinsteuerungswerkzeug,
-sondern ein Anschlag: wenn plötzlich Tausende Dateien zum Löschen anstehen, ist
-etwas anderes schiefgegangen.
+Es gelten zwei Anschläge, der kleinere zählt: die Zahl aus dem Profil, Vorgabe
+100, und die beim Prüfen gemessene Zahl plus 50. Der zweite ist die Zusage, die
+das Statusfenster gemacht hat. Wer dort „17 Dateien löschen?" bestätigt, hat
+nicht hundert erlaubt.
+
+**openrsync hält an `--max-delete` nicht an.** Es hört still auf zu löschen und
+meldet Erfolg. SyncTool zählt die Löschzeilen deshalb nach und bricht selbst
+ab, in jedem Lauf und nicht nur im Git-Lauf.
+
+## Ein unvollständiger Bestand löscht nicht
+
+rsync-Status 24 heißt: Während der Auflistung sind Dateien verschwunden. Die
+Liste ist dann zu kurz, und ein fehlender Eintrag sieht aus wie ein gelöschter.
+Auf einer solchen Grundlage wird nicht gelöscht. Übertragen geht weiter, denn
+eine Datei zu viel zu übertragen ist der harmlose Fehler. Das Statusfenster
+sagt, warum nichts zum Löschen angeboten wird.
 
 ## Die Gegenseite wird geschützt
 
