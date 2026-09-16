@@ -136,6 +136,10 @@ final class AppState: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.flushSave() }
         }
+        // Eine Zeile beim Start, damit die Protokolldatei da ist und man ihr
+        // ansieht, welche Fassung gelaufen ist. Wer hinterher einen Abbruch
+        // untersucht, will als Erstes wissen, womit.
+        runLog.write("SyncTool \(AppVersion.display) gestartet")
         Task { await refreshRsync(preferred: selectedProfile?.rsyncPath ?? "") }
         Task { await refreshGit() }
     }

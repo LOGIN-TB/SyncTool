@@ -141,11 +141,18 @@ final class SyncEngineTests {
 
     /// Eine Maschine mit eigenem Zustandsspeicher, aber derselben Attrappe fuer
     /// den Zielordner: Sonst haengt jeder dieser Tests an echten ssh-Aufrufen.
+    ///
+    /// `inventoryStore` gehoert unbedingt dazu. Ohne ihn nimmt `SyncEngine`
+    /// seine Vorbelegung, und die zeigt auf das echte
+    /// `~/Library/Application Support/SyncTool`. Jeder Testlauf hat dort eine
+    /// Bestandsdatei hinterlassen, unter der frisch erzeugten Kennung des
+    /// Testprofils, und im Ordner des Nutzers lagen dreihundert davon.
     private func engineWith(_ store: SyncStateStore) -> SyncEngine {
         let remote = self.remote
         return SyncEngine(
             runner: runner,
             stateStore: store,
+            inventoryStore: inventoryStore,
             knownHosts: support.appendingPathComponent("known_hosts"),
             identity: support.appendingPathComponent("id_ed25519"),
             remoteFiles: { _, _, _ in remote }
