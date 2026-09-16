@@ -85,6 +85,8 @@ final class AppState: ObservableObject {
     private let profileStore = ProfileStore()
     private let keychain = KeychainStore()
     private let stateStore = SyncStateStore()
+    /// Das Protokoll auf Platte. Siehe `RunLog`.
+    private let runLog = RunLog()
     private let inventoryStore = InventoryStore()
     /// Ein Prozess zur Zeit, ein Abbruchknopf fuer alles. Pruefen, Uebertragen
     /// und Backup teilen sich denselben Runner.
@@ -820,9 +822,18 @@ final class AppState: ObservableObject {
     func append(_ line: String) {
         log.append(line)
         if log.count > logLimit { log.removeFirst(log.count - logLimit) }
+        // Und in die Datei, damit ein Lauf, der die App mitnimmt, eine Spur
+        // hinterlaesst. Im Fenster steht das Protokoll nur, solange die App
+        // laeuft, und genau dann ist es weg, wenn man es braucht.
+        runLog.write(line)
     }
 
-    func clearLog() { log.removeAll() }
+    func clearLog() {
+        log.removeAll()
+        // Die Datei nicht: Sie ist fuer den Fall da, dass jemand hinterher
+        // nachsehen will, und ein neuer Lauf loescht die Spur des vorigen nicht.
+        runLog.write("--- neuer Lauf ---")
+    }
 
     // MARK: - Anzeige in der Menüleiste
 

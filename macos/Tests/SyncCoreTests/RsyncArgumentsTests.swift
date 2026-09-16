@@ -583,4 +583,34 @@ struct SSHCommandTests {
         #expect(SSHCommand.shellQuote("a'b") == "'a'\\''b'")
     }
 
+
+    // MARK: - Geteilte Verbindung
+
+    /// Ein Lauf schickt mehrere kleine Kommandos an die Gegenstelle. Ohne
+    /// Multiplexen ist jedes davon eine neue Anmeldung, bei Passwortanmeldung
+    /// jedes Mal ueber den Askpass-Socket.
+    @Test("Kleine Kommandos teilen sich eine Verbindung")
+    func smallCommandsShareOneConnection() {
+        let profile = Profile(localRoot: "/x", host: "h", user: "u")
+        let mit = SSHCommand.arguments(
+            for: profile, remoteCommand: ["echo hallo"], controlPath: "/tmp/s/c"
+        )
+        #expect(mit.contains("ControlMaster=auto"))
+        #expect(mit.contains("ControlPath=/tmp/s/c"))
+        #expect(mit.contains("ControlPersist=90"))
+    }
+
+    /// Der Uebertragungsweg bleibt unberuehrt. Er ist der eine, der
+    /// zuverlaessig laufen muss; faellt das Multiplexen aus, soll das ein paar
+    /// Sekunden kosten und nicht den Lauf.
+    @Test("Der rsync-Weg teilt sich keine Verbindung")
+    func theTransferPathStaysOnItsOwn() {
+        let profile = Profile(localRoot: "/x", host: "h", user: "u")
+        let ohne = SSHCommand.arguments(for: profile, remoteCommand: ["echo hallo"])
+        #expect(!ohne.contains { $0.hasPrefix("ControlMaster") })
+        let skript = SSHCommand.remoteShellScript(
+            options: SSHCommand.options(for: profile)
+        )
+        #expect(!skript.contains("ControlMaster"))
+    }
 }

@@ -154,4 +154,57 @@ struct InventoryReportTests {
         #expect(bericht.settledContributors.isEmpty)
         #expect(bericht.difference == 0)
     }
+
+    // MARK: - Nach einem sauberen Abgleich stehen dieselben Zahlen da
+
+    /// Die Forderung aus dem Betrieb, woertlich: Nach einem erfolgreichen Sync
+    /// muessen die Zahlen links und rechts gleich sein.
+    ///
+    /// Roh gezaehlt sind sie das nicht, und daran ist auch nichts zu machen:
+    /// Zwei Rechner auf demselben Stand haben verschieden viele Dateien unter
+    /// `.git/`. Ein Repo auf gleichem Stand zaehlt deshalb nicht mit.
+    @Test("Verschieden gepackte Repos zählen nicht mit, die Zahlen stimmen überein")
+    func settledRepositoriesDoNotCount() {
+        let bericht = report(
+            remote: [
+                "a.txt", "unter/", "unter/b.txt",
+                "P/", "P/.git/", "P/.git/pack-1", "P/.git/pack-2", "P/.git/pack-3",
+            ],
+            local: [
+                "a.txt", "unter/", "unter/b.txt",
+                "P/", "P/.git/", "P/.git/alles",
+            ],
+            settled: ["P/.git/"]
+        )
+        // Roh gehen sie auseinander, und das bleibt auch sichtbar.
+        #expect(bericht.remoteFiles != bericht.localFiles)
+        // Was oben steht, stimmt überein.
+        #expect(bericht.remoteFilesOutsideSettled == bericht.localFilesOutsideSettled)
+        #expect(bericht.remoteDirectoriesOutsideSettled == bericht.localDirectoriesOutsideSettled)
+        // Und zwar mit den richtigen Werten: a.txt und unter/b.txt sind Dateien,
+        // unter/ und P/ sind Ordner. `P/.git/` selbst zählt zum Repo.
+        #expect(bericht.remoteFilesOutsideSettled == 2)
+        #expect(bericht.remoteDirectoriesOutsideSettled == 2)
+    }
+
+    /// Bleibt etwas ausserhalb der Repos offen, gehen die Zahlen weiterhin
+    /// auseinander. Sie sollen die Wahrheit zeigen, nicht Ruhe.
+    @Test("Ein offener Rest lässt die Zahlen auseinandergehen")
+    func anUnexplainedRestKeepsTheNumbersApart() {
+        let bericht = report(
+            remote: ["a.txt", "nur-dort.txt", "P/.git/", "P/.git/pack-1"],
+            local: ["a.txt", "P/.git/", "P/.git/alles"],
+            settled: ["P/.git/"]
+        )
+        #expect(bericht.remoteFilesOutsideSettled != bericht.localFilesOutsideSettled)
+        #expect(bericht.hasUnexplainedEntries)
+        #expect(bericht.unexplained.map(\.path) == ["nur-dort.txt"])
+    }
+
+    @Test("Ohne Repos auf gleichem Stand ändert sich an den Zahlen nichts")
+    func withoutSettledRepositoriesNothingChanges() {
+        let bericht = report(remote: ["a.txt", "b.txt"], local: ["a.txt"])
+        #expect(bericht.remoteFilesOutsideSettled == bericht.remoteFiles)
+        #expect(bericht.localFilesOutsideSettled == bericht.localFiles)
+    }
 }

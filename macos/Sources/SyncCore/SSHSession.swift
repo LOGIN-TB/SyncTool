@@ -72,10 +72,29 @@ public final class SSHSession {
     }
 
     public func stop() {
+        closeMultiplexedConnection()
         socket?.stop()
         socket = nil
         remoteShell = nil
         try? FileManager.default.removeItem(at: directory)
+    }
+
+    /// Schickt die geteilte Verbindung weg, bevor ihr Socket verschwindet.
+    ///
+    /// Ohne das bliebe ein ssh im Hintergrund stehen, dessen Socket schon
+    /// geloescht ist. Er raeumt sich nach `ControlPersist` selbst weg, aber
+    /// eine Minute lang haengt eine Anmeldung an der Gegenstelle, die niemand
+    /// mehr braucht. Fehlt der Socket, ist nichts zu tun, deshalb schluckt der
+    /// Aufruf alles.
+    private func closeMultiplexedConnection() {
+        guard FileManager.default.fileExists(atPath: controlPath) else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: SSHCommand.sshPath)
+        process.arguments = ["-O", "exit", "-o", "ControlPath=\(controlPath)", profile.host]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
     }
 
     public var environment: [String: String] {
@@ -91,12 +110,20 @@ public final class SSHSession {
         }
     }
 
+    /// Der Socket, ueber den sich die kleinen Kommandos eine Verbindung teilen.
+    ///
+    /// Im Sitzungsordner und bewusst einbuchstabig: Ein Unix-Socket darf nicht
+    /// laenger als 104 Zeichen sein, und der Temp-Pfad frisst davon schon die
+    /// Haelfte.
+    private var controlPath: String { directory.appendingPathComponent("c").path }
+
     public func sshArguments(remoteCommand: [String] = []) -> [String] {
         SSHCommand.arguments(
             for: profile,
             remoteCommand: remoteCommand,
             knownHosts: knownHosts,
-            identity: identity
+            identity: identity,
+            controlPath: controlPath
         )
     }
 

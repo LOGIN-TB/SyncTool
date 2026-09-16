@@ -54,10 +54,21 @@ public struct SharedState: Codable, Sendable {
     }
 
     /// Name dieses Rechners, fuer `lastMachine`.
-    public static var machineName: String {
-        let name = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+    ///
+    /// Ueber `gethostname` und nicht ueber `Host.current().localizedName`:
+    /// Letzteres fragt das Netz, kann Sekunden brauchen und im ungünstigen
+    /// Fall haengen. Das hier liest einen Wert aus dem Kernel und ist fertig.
+    /// Einmal berechnet, der Rechner benennt sich waehrend eines Laufs nicht um.
+    public static let machineName: String = {
+        var puffer = [CChar](repeating: 0, count: 256)
+        guard gethostname(&puffer, puffer.count - 1) == 0 else { return "unbekannt" }
+        // `.local` weg: Das sagt niemandem etwas, und im Statusfenster steht
+        // es sonst hinter jedem Rechnernamen.
+        let name = String(cString: puffer)
+            .replacingOccurrences(of: ".local", with: "")
+            .trimmingCharacters(in: .whitespaces)
         return name.isEmpty ? "unbekannt" : name
-    }
+    }()
 
     public func encoded() throws -> Data {
         let encoder = JSONEncoder()

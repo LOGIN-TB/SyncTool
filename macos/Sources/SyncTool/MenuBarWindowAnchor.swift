@@ -55,8 +55,19 @@ private final class AnchorView: NSView {
             ) { [weak self] _ in
                 guard let self, self.pending == 0 else { return }
                 // SwiftUI hat das Fenster gesetzt. Das ist die Wahrheit ueber
-                // die Oberkante, und zwar die einzige, die wir bekommen.
+                // die Oberkante.
                 self.anchorTop = window.frame.maxY
+            },
+            // Das Entscheidende, und der Grund, warum der erste Anlauf nie
+            // gegriffen hat: `MenuBarExtra` legt sein Fenster nicht jedes Mal
+            // neu an, es blendet dasselbe wieder ein. Steht es dabei schon an
+            // der richtigen Stelle, kommt gar keine Bewegung, und ohne
+            // Bewegung hatten wir nie eine Oberkante zu halten. Beim
+            // Sichtbarwerden steht sie dagegen immer fest.
+            center.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                self?.anchorTop = window.frame.maxY
             },
             center.addObserver(
                 forName: NSWindow.didResizeNotification, object: window, queue: .main
@@ -64,6 +75,15 @@ private final class AnchorView: NSView {
                 self?.realign(window)
             },
         ]
+
+        // Und fuer den Fall, dass das Fenster schon steht, wenn diese Ansicht
+        // eingehaengt wird. Eine Runde spaeter, weil SwiftUI zu diesem
+        // Zeitpunkt noch nicht positioniert hat: Genau daran ist der erste
+        // Anlauf gescheitert, der hier sofort gemessen hat.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.anchorTop == nil, window.isVisible else { return }
+            self.anchorTop = window.frame.maxY
+        }
     }
 
     deinit { unsubscribe() }
@@ -74,6 +94,10 @@ private final class AnchorView: NSView {
     }
 
     private func realign(_ window: NSWindow) {
+        // Ohne Oberkante gibt es nichts zu halten. Sie hier zu nehmen waere
+        // falsch: Die Groesse hat sich gerade geaendert, die Oberkante ist
+        // also schon verschoben, und wir wuerden die Verschiebung festhalten,
+        // die wir gerade rueckgaengig machen sollen.
         guard let anchorTop else { return }
         var origin = window.frame.origin
         origin.y = anchorTop - window.frame.height

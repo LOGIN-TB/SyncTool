@@ -621,6 +621,7 @@ struct StatusView: View {
                 Spacer(minLength: 20)
 
                 Button(showLog ? "Protokoll ausblenden" : "Protokoll") { showLog.toggle() }
+                    .help("Das vollständige Protokoll liegt in \(AppPaths.runLogPath)")
                 Button("Beenden") { NSApp.terminate(nil) }
             }
             .buttonStyle(.borderless)
@@ -642,9 +643,10 @@ private struct InventoryBalance: View {
     @State private var settledExpanded = false
     @State private var restExpanded = false
 
+    /// Gemessen an den Zahlen, die dastehen, nicht an den rohen.
     private var differs: Bool {
-        report.remoteFiles != report.localFiles
-            || report.remoteDirectories != report.localDirectories
+        report.remoteFilesOutsideSettled != report.localFilesOutsideSettled
+            || report.remoteDirectoriesOutsideSettled != report.localDirectoriesOutsideSettled
     }
 
     /// Orange nur, wenn der Unterschied offen ist. Liegt er ganz in Repos auf
@@ -655,15 +657,21 @@ private struct InventoryBalance: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
-                side(remoteLabel, report.remoteFiles, report.remoteDirectories, report.remoteBytes)
+                side(
+                    remoteLabel, report.remoteFilesOutsideSettled,
+                    report.remoteDirectoriesOutsideSettled, report.remoteBytes
+                )
                 Image(systemName: differs ? "notequal" : "equal")
                     .font(.caption)
                     .foregroundStyle(unexplained ? Color.orange : Color.secondary.opacity(0.6))
                     .padding(.top, 18)
-                side("Lokal", report.localFiles, report.localDirectories, report.localBytes)
+                side(
+                    "Lokal", report.localFilesOutsideSettled,
+                    report.localDirectoriesOutsideSettled, report.localBytes
+                )
             }
 
-            if differs && !unexplained && report.settledRepositories > 0 { settledNote }
+            if report.settledRepositories > 0 { settledNote }
             if unexplained { rest }
             if report.excludedCount > 0 { excluded }
         }
@@ -701,7 +709,24 @@ private struct InventoryBalance: View {
                 }
                 Text(
                     "Dieselben Commits, anders gepackt: git benennt seine Packdateien nach "
-                        + "ihrem Inhalt und packt von sich aus um. Übertragen wird da nichts."
+                        + "ihrem Inhalt und packt von sich aus um. Ein Repo auf gleichem "
+                        + "Stand ist deshalb eine Einheit und kein Haufen Dateien, und es "
+                        + "zählt oben nicht mit."
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
+
+                // Die rohen Summen bleiben erreichbar: Genau die sieht ein
+                // FTP-Client, und genau die will man dagegenhalten können.
+                Text(
+                    "Roh gezählt, also alles mitgerechnet: \(remoteLabel) "
+                        + "\(Format.number(report.remoteFiles)) Dateien · "
+                        + "\(Format.number(report.remoteDirectories)) Ordner, lokal "
+                        + "\(Format.number(report.localFiles)) Dateien · "
+                        + "\(Format.number(report.localDirectories)) Ordner. "
+                        + "Das ist die Sicht eines FTP-Clients."
                 )
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -712,10 +737,8 @@ private struct InventoryBalance: View {
             .padding(.top, 4)
         } label: {
             Text(
-                "\(Format.count(report.difference, singular: "Eintrag", plural: "Einträge")) "
-                    + "Unterschied, alle in "
-                    + "\(Format.count(report.settledContributors.count, singular: "Repo", plural: "Repos")) "
-                    + "auf gleichem Stand"
+                "\(Format.count(report.settledRepositories, singular: "Repo", plural: "Repos")) "
+                    + "auf gleichem Stand, nicht mitgezählt"
             )
             .font(.caption)
             .foregroundStyle(.secondary)

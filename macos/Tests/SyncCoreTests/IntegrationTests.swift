@@ -1729,6 +1729,20 @@ struct TwoMachinesGitTests {
         // Und der Zweig bleibt vom Hauptlauf ausgenommen: sonst wanderten die
         // frisch gepackten Dateien bei jedem Lauf ueber die Leitung.
         #expect(status.frozenBranches(for: .push) == ["Projekt/.git/"])
+
+        // Die Forderung aus dem Betrieb, woertlich: Nach einem erfolgreichen
+        // Abgleich muessen die Zahlen links und rechts gleich sein. Roh
+        // gezaehlt sind sie das hier nicht, die Repos sind verschieden gepackt.
+        // Genau deshalb zaehlt ein Repo auf gleichem Stand nicht mit.
+        #expect(status.report.remoteFiles != status.report.localFiles)
+        #expect(
+            status.report.remoteFilesOutsideSettled == status.report.localFilesOutsideSettled
+        )
+        #expect(
+            status.report.remoteDirectoriesOutsideSettled
+                == status.report.localDirectoriesOutsideSettled
+        )
+        #expect(!status.report.hasUnexplainedEntries)
     }
 
     @Test("Ein bewegter Zweig bleibt ein Fall für die Übertragung")

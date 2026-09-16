@@ -8,6 +8,29 @@ public enum SSHCommand {
     public static let keygenPath = "/usr/bin/ssh-keygen"
 
     /// Optionen ohne Ziel und ohne Kommando.
+    /// Wiederverwendung einer offenen Verbindung fuer die kleinen Kommandos.
+    ///
+    /// Ein Lauf schickt mehrere davon: Sperre greifen, Kennung lesen, Stand
+    /// lesen und schreiben, alte Sicherungen raeumen, Sperre loesen. Ohne
+    /// Multiplexen ist jedes davon eine vollstaendige neue Verbindung mit
+    /// Handschlag und Anmeldung, bei Passwortanmeldung jedes Mal ueber den
+    /// Askpass-Socket. Auf einer Storage Box sind das Sekunden je Runde, und
+    /// die App steht solange still.
+    ///
+    /// Bewusst nur fuer diese Kommandos und nicht fuer das rsh-Skript, mit dem
+    /// rsync arbeitet: Der Uebertragungsweg ist der eine, der zuverlaessig
+    /// laufen muss, und der aendert sich hier nicht. Faellt das Multiplexen
+    /// aus, kostet das ein paar Sekunden und nicht den Lauf.
+    public static func multiplexing(controlPath: String) -> [String] {
+        [
+            "-o", "ControlMaster=auto",
+            "-o", "ControlPath=\(optionValue(controlPath))",
+            // Lang genug, dass ein Lauf mit einer Verbindung auskommt, kurz
+            // genug, dass nach dem Beenden nichts stehenbleibt.
+            "-o", "ControlPersist=90",
+        ]
+    }
+
     public static func options(
         for profile: Profile,
         knownHosts: URL = AppPaths.knownHostsFile,
@@ -51,9 +74,12 @@ public enum SSHCommand {
         for profile: Profile,
         remoteCommand: [String] = [],
         knownHosts: URL = AppPaths.knownHostsFile,
-        identity: URL = AppPaths.privateKeyFile
+        identity: URL = AppPaths.privateKeyFile,
+        /// Gesetzt heisst: diese Verbindung darf eine offene mitbenutzen.
+        controlPath: String? = nil
     ) -> [String] {
         var args = options(for: profile, knownHosts: knownHosts, identity: identity)
+        if let controlPath { args += multiplexing(controlPath: controlPath) }
         args.append("\(profile.user)@\(profile.host)")
         args += remoteCommand
         return args

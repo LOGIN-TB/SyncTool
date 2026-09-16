@@ -31,6 +31,11 @@ public enum AppPaths {
         supportDirectory.appendingPathComponent("profiles.json")
     }
 
+    /// Wo das Protokoll eines Laufs mitgeschrieben wird. Siehe `RunLog`.
+    public static var runLogPath: String {
+        supportDirectory.appendingPathComponent("protokoll.log").path
+    }
+
     public static var knownHostsFile: URL {
         supportDirectory.appendingPathComponent("known_hosts")
     }

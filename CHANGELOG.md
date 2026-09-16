@@ -68,6 +68,15 @@
 
 ### Statusfenster
 
+- **Nach einem erfolgreichen Abgleich stehen links und rechts dieselben
+  Zahlen.** Roh gezählt taten sie das nie und konnten es auch nicht: Zwei
+  Rechner auf demselben Stand haben verschieden viele Dateien unter `.git/`,
+  weil git seine Packdateien nach Inhalt benennt und von sich aus umpackt. Ein
+  Repo auf gleichem Stand ist eine Einheit und kein Haufen Dateien, es zählt
+  oben nicht mehr mit. Die rohen Summen stehen eine Zeile tiefer, das ist die
+  Sicht eines FTP-Clients.
+
+
 - **Das Fenster bleibt unter seinem Symbol**, auch wenn Abschnitte auf- und
   zugeklappt werden. Vorher wanderte die Oberkante mit jeder Höhenänderung.
 - **Der Unterschied zwischen den beiden Bestandszahlen ist belegt statt

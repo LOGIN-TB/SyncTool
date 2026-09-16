@@ -160,13 +160,20 @@ public struct SettledRepository: Sendable, Hashable, Identifiable {
     public var id: String { branch }
     /// Der `.git`-Zweig, etwa `Projekt/.git/`.
     public let branch: String
+    /// Eintraege insgesamt, Ordner eingeschlossen.
     public let remote: Int
     public let local: Int
+    /// Davon Dateien. Getrennt, weil das Statusfenster Dateien und Ordner
+    /// getrennt ausweist und beide Zahlen um dieses Repo bereinigt sein muessen.
+    public let remoteFiles: Int
+    public let localFiles: Int
 
-    public init(branch: String, remote: Int, local: Int) {
+    public init(branch: String, remote: Int, local: Int, remoteFiles: Int, localFiles: Int) {
         self.branch = branch
         self.remote = remote
         self.local = local
+        self.remoteFiles = remoteFiles
+        self.localFiles = localFiles
     }
 
     /// Mit Vorzeichen, nicht als Betrag: Nur so addieren sich die Zeilen zur
@@ -269,19 +276,23 @@ public struct InventoryReport: Sendable {
             sorted.first { path.hasPrefix($0) }
         }
 
-        var counts: [String: (remote: Int, local: Int)] = [:]
-        for name in sorted { counts[name] = (0, 0) }
+        var counts: [String: (remote: Int, local: Int, remoteFiles: Int, localFiles: Int)] = [:]
+        for name in sorted { counts[name] = (0, 0, 0, 0) }
         var rest: [OneSidedEntry] = []
 
-        for path in remote.paths {
-            if let name = branch(of: path) { counts[name]?.remote += 1 }
-            else if local.entries[path] == nil {
+        for (path, entry) in remote.entries {
+            if let name = branch(of: path) {
+                counts[name]?.remote += 1
+                if !entry.isDirectory { counts[name]?.remoteFiles += 1 }
+            } else if local.entries[path] == nil {
                 rest.append(OneSidedEntry(path: path, side: .remote))
             }
         }
-        for path in local.paths {
-            if let name = branch(of: path) { counts[name]?.local += 1 }
-            else if remote.entries[path] == nil {
+        for (path, entry) in local.entries {
+            if let name = branch(of: path) {
+                counts[name]?.local += 1
+                if !entry.isDirectory { counts[name]?.localFiles += 1 }
+            } else if remote.entries[path] == nil {
                 rest.append(OneSidedEntry(path: path, side: .local))
             }
         }
@@ -297,7 +308,10 @@ public struct InventoryReport: Sendable {
             excluded: ExcludedBranch.group(excludedPaths),
             settled: sorted.map {
                 SettledRepository(
-                    branch: $0, remote: counts[$0]?.remote ?? 0, local: counts[$0]?.local ?? 0
+                    branch: $0,
+                    remote: counts[$0]?.remote ?? 0, local: counts[$0]?.local ?? 0,
+                    remoteFiles: counts[$0]?.remoteFiles ?? 0,
+                    localFiles: counts[$0]?.localFiles ?? 0
                 )
             },
             unexplained: Array(rest.prefix(Self.unexplainedLimit)),
@@ -321,6 +335,35 @@ public struct InventoryReport: Sendable {
     public var settledRemote: Int { settled.reduce(0) { $0 + $1.remote } }
     public var settledLocal: Int { settled.reduce(0) { $0 + $1.local } }
     public var settledRepositories: Int { settled.count }
+
+    /// Die Zahlen, die im Statusfenster gross dastehen: alles ausserhalb der
+    /// Repos auf gleichem Stand.
+    ///
+    /// Frueher standen dort die rohen Summen, damit sie sich gegen einen
+    /// FTP-Client halten lassen. Das war gut gemeint und im Alltag falsch:
+    /// Zwei Rechner auf demselben Stand haben verschieden viele Dateien unter
+    /// `.git/`, weil git seine Packdateien nach Inhalt benennt und von sich
+    /// aus umpackt. Nach einem sauberen Abgleich standen deshalb zwei
+    /// verschiedene Zahlen da, und "alles auf gleichem Stand" darueber sah aus
+    /// wie ein Widerspruch. Eine Zahl, der man nicht glaubt, ist keine Zahl.
+    ///
+    /// Ein Repo auf gleichem Stand ist eine Einheit und kein Haufen Dateien.
+    /// Herausgerechnet stimmen die beiden Zahlen ueberein, sobald es nichts zu
+    /// tun gibt. Die rohen Summen sind nicht verloren, sie stehen eine Zeile
+    /// tiefer.
+    public var remoteFilesOutsideSettled: Int { remoteFiles - settledRemoteFiles }
+    public var localFilesOutsideSettled: Int { localFiles - settledLocalFiles }
+    public var remoteDirectoriesOutsideSettled: Int { remoteDirectories - settledRemoteDirectories }
+    public var localDirectoriesOutsideSettled: Int { localDirectories - settledLocalDirectories }
+
+    public var settledRemoteFiles: Int { settled.reduce(0) { $0 + $1.remoteFiles } }
+    public var settledLocalFiles: Int { settled.reduce(0) { $0 + $1.localFiles } }
+    public var settledRemoteDirectories: Int {
+        settled.reduce(0) { $0 + ($1.remote - $1.remoteFiles) }
+    }
+    public var settledLocalDirectories: Int {
+        settled.reduce(0) { $0 + ($1.local - $1.localFiles) }
+    }
 
     /// Wie weit die beiden Summen auseinanderliegen.
     public var difference: Int {

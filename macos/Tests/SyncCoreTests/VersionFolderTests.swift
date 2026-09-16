@@ -54,3 +54,49 @@ struct VersionFolderTests {
         #expect(VersionFolder.expired(["2020-01-01-1200"], keepDays: 0).isEmpty)
     }
 }
+
+@Suite("Protokoll auf Platte")
+struct RunLogTests {
+    private func sandbox() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("synctool-log-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    @Test("Zeilen landen mit Zeitstempel in der Datei")
+    func linesAreWrittenWithATimestamp() throws {
+        let base = try sandbox()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let log = RunLog(url: base.appendingPathComponent("protokoll.log"))
+
+        log.write("erste Zeile")
+        log.write("zweite Zeile")
+
+        let text = try String(contentsOfFile: log.path, encoding: .utf8)
+        #expect(text.contains("erste Zeile"))
+        #expect(text.contains("zweite Zeile"))
+        // Datum vorn, damit sich hinterher einordnen lässt, wann was war.
+        #expect(text.hasPrefix("20"))
+    }
+
+    /// Eine Datei, die unbegrenzt waechst, ist selbst ein Problem. Gekuerzt
+    /// wird hinten heraus: Der junge Teil ist der interessante.
+    @Test("Bei Überlänge bleibt die jüngere Hälfte stehen")
+    func theFileIsTrimmedFromTheFront() throws {
+        let base = try sandbox()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let url = base.appendingPathComponent("protokoll.log")
+        let log = RunLog(url: url)
+
+        let fuellung = String(repeating: "x", count: 1000)
+        for i in 0..<(RunLog.maxBytes / 1000 + 200) { log.write("\(i) \(fuellung)") }
+
+        let groesse = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        #expect(groesse <= RunLog.maxBytes)
+        let text = try String(contentsOf: url, encoding: .utf8)
+        // Die letzte Zeile ist noch da, eine frühe nicht mehr.
+        #expect(text.contains("\(RunLog.maxBytes / 1000 + 199) "))
+        #expect(!text.contains("\n0 x"))
+    }
+}
