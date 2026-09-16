@@ -38,6 +38,34 @@
   solchen Namen ging vorher ins Leere, und `--delete` räumte genau die Datei
   weg, die sie schützen sollte.
 
+### Mehrere Rechner
+
+- **Vor jedem Lauf greift SyncTool eine Sperre im Ziel.** Zwei Läufe mit
+  Löschen räumen sich sonst gegenseitig genau die Dateien weg, die der jeweils
+  andere eben geschrieben hat, und beide schreiben danach einen Bestand, der
+  den eigenen Stand als gemeinsamen behauptet. Eine Sperre, die älter als eine
+  Stunde ist, wird übernommen.
+- **Das Statusfenster zeigt, wer zuletzt gegen dieses Ziel gelaufen ist.**
+- **Die Zielkennung ist scharf.** `.synctool-ziel` wird beim Verbindungstest
+  angelegt und vor jedem Lauf geprüft. Bisher war die Regel dafür vorhanden,
+  aber toter Code: Die Datei wurde nie geschrieben und nie gelesen.
+- Neu: [docs/mehrere-rechner.md](docs/mehrere-rechner.md) mit dem, was
+  zugesichert wird und was nicht.
+
+### Namen und Zeichen
+
+- **`-8` gilt jetzt für jeden Bestandslauf.** Im Code stand, openrsync könne
+  das nicht. Nachgemessen: es kann. Ohne `-8` schrieb es einen Gedankenstrich
+  als `\#342\#200\#223`, und jede Schutz- oder Filterregel, die aus so einem
+  Pfad entstand, ging am echten Dateinamen vorbei. Gespeicherte Bestände aus
+  der Zeit davor werden einmalig geradegezogen.
+- Belegt, dass dieselbe Datei in NFC und NFD als eine gilt. Der Mac legt über
+  den Finder NFD an, die Linux-Seite liefert NFC. Swift vergleicht
+  Zeichenketten kanonisch äquivalent, und der Code verlässt sich darauf; ein
+  Test hält das fest, damit es niemand versehentlich aufgibt.
+- `--timeout=900` für Läufe über ssh. Eine hängende Verbindung blockierte den
+  Lauf bisher unbegrenzt.
+
 ### Statusfenster
 
 - **Das Fenster bleibt unter seinem Symbol**, auch wenn Abschnitte auf- und

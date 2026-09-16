@@ -347,11 +347,18 @@ public enum RsyncArguments {
         public var wantsChecksums: Bool
         /// Namen unmaskiert ausgeben (`-8`).
         ///
-        /// Ohne das schreibt openrsync "Ümläut" als "\#303\#234ml…", und ein
-        /// Werkzeug, das die Liste weiterverarbeitet, findet die Datei nicht.
-        /// Nur der Backup-Lauf setzt es: Die gespeicherten Bestandslisten
-        /// enthalten die maskierte Schreibweise, ein Wechsel im Pruefpfad liesse
-        /// jeden Umlautpfad als geloescht und neu erscheinen.
+        /// Ohne das schreibt openrsync einen Gedankenstrich als
+        /// `\#342\#200\#223`, rsync 3.x nicht. Zwei Folgen, beide schlecht:
+        /// Jede Regel, die aus so einem Pfad gebaut wird, geht am echten
+        /// Dateinamen vorbei, und ein Wechsel des rsync-Binaries aendert die
+        /// Schreibweise im gespeicherten Bestand, womit jeder betroffene Pfad
+        /// einmalig als geloescht und neu gilt.
+        ///
+        /// Frueher stand hier, openrsync koenne `-8` nicht. Nachgemessen: es
+        /// kann, und die Ausgabe ist dann unmaskiert. Deshalb jetzt ueberall
+        /// an. Die gespeicherten Bestaende aus der Zeit davor tragen die
+        /// maskierte Schreibweise; dafuer springt `SyncInventory.currentSchema`
+        /// auf 3 und laesst sie einmalig geradeziehen.
         public var wantsRawNames: Bool
         /// `nil` heisst: auf dem alten Weg aus dem Profil ableiten.
         public var endpoints: SyncEndpoints?
@@ -362,7 +369,7 @@ public enum RsyncArguments {
             remoteShell: String? = nil,
             excludeFile: String? = nil,
             wantsChecksums: Bool = false,
-            wantsRawNames: Bool = false,
+            wantsRawNames: Bool = true,
             endpoints: SyncEndpoints? = nil
         ) {
             self.side = side

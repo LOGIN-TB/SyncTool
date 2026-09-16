@@ -84,6 +84,22 @@ public enum InventoryBuilder {
     ///
     /// Der Wurzeleintrag "./" faellt raus: rsync meldet ihn immer, er steht aber
     /// fuer den Stammordner selbst und nicht fuer etwas darin.
+    ///
+    /// Der Schluessel ist der rohe Pfad, so wie die Seite ihn meldet. Kein
+    /// Normalisieren, und zwar mit Grund.
+    ///
+    /// Der Mac legt ueber den Finder NFD an, eine Datei, die auf der
+    /// Linux-Seite entsteht, kommt in NFC. Das sind verschiedene Bytes, und in
+    /// vielen Sprachen waeren es damit zwei Eintraege, einer "nur hier" und
+    /// einer "nur drueben". Swift vergleicht Zeichenketten aber kanonisch
+    /// aequivalent, und `Dictionary`, `Set` und `hasPrefix` tun es ebenso: Die
+    /// beiden Schreibweisen sind hier von sich aus dieselbe Datei. Belegt in
+    /// "Dieselbe Datei in NFC und NFD ist eine Datei".
+    ///
+    /// Zu normalisieren waere hier also wirkungslos und zugleich schaedlich:
+    /// Der Pfad im Eintrag geht als Name an rsync, und ein umgeschriebener
+    /// Name legte auf der Gegenseite eine zweite Datei an, statt die
+    /// vorhandene zu treffen.
     public static func build(
         from entries: [InventoryEntry], capturedAt: Date = Date(), isComplete: Bool = true
     ) -> SideInventory {

@@ -99,8 +99,13 @@ struct ZipArgumentsTests {
     /// openrsync schreibt Umlaute sonst als "\#303\#244", und zip fände die
     /// Datei nicht. Im Prüfpfad darf das nicht an, dort sind die gespeicherten
     /// Bestandslisten in der maskierten Schreibweise abgelegt.
-    @Test("Der Backup-Bestandslauf lässt hohe Zeichen unescaped, der Prüflauf nicht")
-    func onlyTheBackupRunAsksForRawNames() {
+    /// Frueher galt `-8` nur fuer den Backup-Lauf, weil openrsync es angeblich
+    /// nicht kann. Nachgemessen: es kann, und die Ausgabe ist dann unmaskiert.
+    /// Seitdem gilt es ueberall. Eine maskierte Schreibweise im Bestand macht
+    /// jede Regel, die daraus gebaut wird, unwirksam, und ein Wechsel des
+    /// Binaries liesse jeden betroffenen Pfad als geloescht und neu erscheinen.
+    @Test("Jeder Bestandslauf lässt hohe Zeichen unescaped")
+    func everyInventoryRunAsksForRawNames() {
         let profile = Profile(localRoot: "/x", host: "h", user: "u")
         let backup = RsyncArguments.inventoryArguments(
             profile: profile,
@@ -110,7 +115,14 @@ struct ZipArgumentsTests {
             profile: profile, options: .init(side: .local, emptyDirectory: "/tmp/leer")
         )
         #expect(backup.contains("-8"))
-        #expect(!check.contains("-8"))
+        #expect(check.contains("-8"))
+        // Abschalten geht weiterhin, falls je eine Fassung auftaucht, die es
+        // nicht vertraegt.
+        let ohne = RsyncArguments.inventoryArguments(
+            profile: profile,
+            options: .init(side: .local, emptyDirectory: "/tmp/leer", wantsRawNames: false)
+        )
+        #expect(!ohne.contains("-8"))
     }
 
     // MARK: - Ausgabe

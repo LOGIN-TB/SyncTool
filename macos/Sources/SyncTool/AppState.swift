@@ -460,10 +460,56 @@ final class AppState: ObservableObject {
             return
         }
         let count = (try? FileManager.default.contentsOfDirectory(atPath: url.path))?.count ?? 0
+        await stampTarget(
+            profile,
+            store: RemoteStore.make(
+                profile: profile, session: nil,
+                endpoints: SyncEndpoints.resolve(profile: profile)
+            )
+        )
         settingsNotice =
             "Zielordner ist da und beschreibbar, \(count) "
             + (count == 1 ? "Eintrag" : "Einträge") + " direkt darin."
         append(settingsNotice!)
+    }
+
+    /// Legt die Kennung im Ziel ab und merkt sie sich im Profil.
+    ///
+    /// Damit laesst sich der Ordner wiedererkennen, und ein Lauf gegen einen
+    /// anderen faellt auf, bevor er etwas anfasst. Der gefaehrlichste Fall
+    /// braucht dafuer keinen Fehler in der App: Die Platte ist nicht
+    /// verbunden, und an ihrer Stelle steht ein leerer Ordner desselben Namens.
+    ///
+    /// Eine vorhandene Kennung bleibt stehen. Sie neu zu setzen hiesse, die
+    /// Wiedererkennung fuer alle anderen Rechner zu zerstoeren, die auf
+    /// denselben Ordner zeigen.
+    private func remember(_ marker: String, for id: UUID) {
+        guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
+        profiles[index].targetMarkerID = marker
+        profiles[index].probedAt = Date()
+        scheduleSave()
+    }
+
+    private func stampTarget(_ profile: Profile, store: RemoteFiles?) async {
+        guard let store else { return }
+        if let vorhanden = await store.read(TargetMarker.fileName) {
+            let gelesen = String(decoding: vorhanden, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !gelesen.isEmpty {
+                remember(gelesen, for: profile.id)
+                return
+            }
+        }
+        let neu = profile.targetMarkerID.isEmpty ? TargetMarker.make() : profile.targetMarkerID
+        do {
+            try await store.write(
+                Data(TargetMarker.contents(neu).utf8), to: TargetMarker.fileName
+            )
+            remember(neu, for: profile.id)
+            append("Kennung im Ziel hinterlegt.")
+        } catch {
+            append("Die Kennung ließ sich nicht im Ziel ablegen: \(error.localizedDescription)")
+        }
     }
 
     private func testSSH(profile: Profile, password: String) async {
@@ -474,6 +520,13 @@ final class AppState: ObservableObject {
             try session.start(password: password)
             let result = try await session.testConnection()
             if result.succeeded {
+                await stampTarget(
+                    profile,
+                    store: RemoteStore.make(
+                        profile: profile, session: session,
+                        endpoints: SyncEndpoints.resolve(profile: profile)
+                    )
+                )
                 settingsNotice = "Verbindung steht, Zielordner „\(profile.remotePath)“ ist vorhanden."
                 append(settingsNotice!)
             } else {
@@ -607,8 +660,7 @@ final class AppState: ObservableObject {
                 // Genau die Pfade, die die Pruefung dieser Richtung zugeordnet
                 // hat. Konflikte stehen in keiner der beiden Listen und bleiben
                 // deshalb liegen, statt einseitig ueberschrieben zu werden.
-                transferPaths: direction == .pull
-                    ? current?.incoming.map(\.path) : current?.outgoing.map(\.path),
+                transferPaths: current?.transferPaths(for: direction),
                 onLog: { [weak self] line in
                     Task { @MainActor in self?.append(line) }
                 },

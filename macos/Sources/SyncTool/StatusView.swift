@@ -136,7 +136,6 @@ struct StatusView: View {
         )
     }
 
-    @ViewBuilder
     /// Waehrend der Pruefung haben sich Dateien bewegt.
     ///
     /// Ohne diesen Hinweis stuende im Statusfenster schlicht nichts zum
@@ -151,19 +150,34 @@ struct StatusView: View {
             + "eine gelöschte. Noch einmal prüfen."
     }
 
+    /// Wer zuletzt gegen dieses Ziel gelaufen ist.
+    ///
+    /// Die Frage, die man sich bei mehreren Rechnern wirklich stellt: Ist mein
+    /// Stand der aktuelle, oder hat inzwischen jemand anders gearbeitet? Ohne
+    /// diese Zeile lässt sie sich aus dem Fenster nicht beantworten.
+    private var remoteRunNotice: String? {
+        guard let run = state.resolvedStatus?.lastRemoteRun else { return nil }
+        return "Zuletzt abgeglichen von \(run.machine), \(Format.timestamp(run.at))."
+    }
+
+    @ViewBuilder
     private var banners: some View {
         let warning = state.rsyncWarning
         let notice = state.notice
+        let remoteRun = remoteRunNotice
         let incomplete = incompleteInventoryNotice
         let failure: String? = {
             if case .failed(let message) = state.phase { return message }
             return nil
         }()
 
-        if warning != nil || notice != nil || incomplete != nil || failure != nil {
+        if warning != nil || notice != nil || remoteRun != nil || incomplete != nil
+            || failure != nil
+        {
             VStack(alignment: .leading, spacing: 6) {
                 if let warning { Banner(text: warning, kind: .warning) }
                 if let notice { Banner(text: notice, kind: .info) }
+                if let remoteRun { Banner(text: remoteRun, kind: .info) }
                 if let incomplete { Banner(text: incomplete, kind: .warning) }
                 if let failure { Banner(text: failure, kind: .error) }
             }

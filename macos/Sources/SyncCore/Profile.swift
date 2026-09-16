@@ -191,6 +191,10 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
     public static let internalExcludes: [String] = [
         "/\(VersionFolder.root)/",
         "/.synctool-partial/",
+        // Sperre und gemeinsamer Stand. Die gehoeren dem Ziel und nicht dem
+        // Abgleich: Wanderten sie mit, laege auf jedem Rechner eine Kopie der
+        // Sperre, und der gemeinsame Stand wuerde von sich selbst ueberschrieben.
+        "/.synctool/",
     ]
 
     /// `.git/` fehlt hier bewusst: ohne History ist der Abgleich zwischen

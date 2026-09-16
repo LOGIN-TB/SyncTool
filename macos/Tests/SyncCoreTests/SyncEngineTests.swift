@@ -60,12 +60,41 @@ private final class FakeRunner: RsyncExecuting, @unchecked Sendable {
     func cancel() { cancelled = true }
 }
 
+/// Steht statt des Zielordners. Ohne sie haenge jeder Test, der eine
+/// Uebertragung fahren laesst, an echten ssh-Aufrufen gegen `example.org` und
+/// liefe fuenfzehn Sekunden je Versuch in den Verbindungsablauf.
+private final class FakeRemote: RemoteFiles, @unchecked Sendable {
+    var files: [String: Data] = [:]
+    var directories: Set<String> = []
+    var claimed: [String] = []
+    var removed: [(names: [String], directory: String)] = []
+    /// Was `claim` antworten soll. Vorbelegt: die Sperre ist frei.
+    var claimAnswer: RemoteClaim = .claimed
+
+    func read(_ name: String) async -> Data? { files[name] }
+    func list(_ name: String) async -> [String] {
+        directories.filter { $0.hasPrefix(name + "/") }
+            .map { String($0.dropFirst(name.count + 1)) }
+            .sorted()
+    }
+    func write(_ data: Data, to name: String) async throws { files[name] = data }
+    func remove(_ names: [String], under directory: String) async throws {
+        removed.append((names, directory))
+        for name in names { directories.remove(directory + "/" + name) }
+    }
+    func claim(_ name: String) async -> RemoteClaim {
+        if case .claimed = claimAnswer { claimed.append(name) }
+        return claimAnswer
+    }
+}
+
 @Suite("SyncEngine")
 final class SyncEngineTests {
     private let sandbox: URL
     private let localRoot: URL
     private let support: URL
     private let runner = FakeRunner()
+    private let remote = FakeRemote()
     private let engine: SyncEngine
     private let inventoryStore: InventoryStore
     private var profile: Profile
@@ -79,12 +108,14 @@ final class SyncEngineTests {
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
 
         inventoryStore = InventoryStore(directory: support)
+        let remote = self.remote
         engine = SyncEngine(
             runner: runner,
             stateStore: SyncStateStore(url: support.appendingPathComponent("state.json")),
             inventoryStore: inventoryStore,
             knownHosts: support.appendingPathComponent("known_hosts"),
-            identity: support.appendingPathComponent("id_ed25519")
+            identity: support.appendingPathComponent("id_ed25519"),
+            remoteFiles: { _, _, _ in remote }
         )
         profile = Profile(
             localRoot: localRoot.path,
@@ -106,6 +137,19 @@ final class SyncEngineTests {
 
     deinit {
         try? FileManager.default.removeItem(at: sandbox)
+    }
+
+    /// Eine Maschine mit eigenem Zustandsspeicher, aber derselben Attrappe fuer
+    /// den Zielordner: Sonst haengt jeder dieser Tests an echten ssh-Aufrufen.
+    private func engineWith(_ store: SyncStateStore) -> SyncEngine {
+        let remote = self.remote
+        return SyncEngine(
+            runner: runner,
+            stateStore: store,
+            knownHosts: support.appendingPathComponent("known_hosts"),
+            identity: support.appendingPathComponent("id_ed25519"),
+            remoteFiles: { _, _, _ in remote }
+        )
     }
 
     private func outcome(_ items: [ChangeItem], status: Int32 = 0) -> RsyncOutcome {
@@ -251,12 +295,7 @@ final class SyncEngineTests {
     @Test("Nach der Übertragung steht der Zeitpunkt fest")
     func transferRecordsTheSyncTime() async throws {
         let store = SyncStateStore(url: support.appendingPathComponent("state.json"))
-        let engine = SyncEngine(
-            runner: runner,
-            stateStore: store,
-            knownHosts: support.appendingPathComponent("known_hosts"),
-            identity: support.appendingPathComponent("id_ed25519")
-        )
+        let engine = engineWith(store)
         #expect(store.load().lastSync(for: profile) == nil)
 
         runner.outcomes = [outcome([])]
@@ -270,12 +309,7 @@ final class SyncEngineTests {
     @Test("Gespeichert wird der Prüfzeitpunkt, nicht das Ende des Laufs")
     func transferRecordsTheCheckTime() async throws {
         let store = SyncStateStore(url: support.appendingPathComponent("state.json"))
-        let engine = SyncEngine(
-            runner: runner,
-            stateStore: store,
-            knownHosts: support.appendingPathComponent("known_hosts"),
-            identity: support.appendingPathComponent("id_ed25519")
-        )
+        let engine = engineWith(store)
         // Was zwischen Pruefung und Laufende geschrieben wird, hat dieser Lauf
         // nicht gesehen. Stuende hier die Endzeit, gaelte es trotzdem als
         // abgeglichen und koennte nie wieder ein Konflikt werden.
@@ -293,12 +327,7 @@ final class SyncEngineTests {
     @Test("Ein gescheiterter Lauf lässt den letzten Abgleich stehen")
     func failedTransferKeepsTheSyncTime() async throws {
         let store = SyncStateStore(url: support.appendingPathComponent("state.json"))
-        let engine = SyncEngine(
-            runner: runner,
-            stateStore: store,
-            knownHosts: support.appendingPathComponent("known_hosts"),
-            identity: support.appendingPathComponent("id_ed25519")
-        )
+        let engine = engineWith(store)
         let frueher = Date(timeIntervalSince1970: 1_000_000)
         store.recordSync(for: profile, at: frueher)
 
@@ -322,12 +351,7 @@ final class SyncEngineTests {
     @Test("Ohne vorherigen Abgleich hinterlässt ein Fehlschlag keinen Zeitpunkt")
     func failedTransferRecordsNothingAtAll() async throws {
         let store = SyncStateStore(url: support.appendingPathComponent("state.json"))
-        let engine = SyncEngine(
-            runner: runner,
-            stateStore: store,
-            knownHosts: support.appendingPathComponent("known_hosts"),
-            identity: support.appendingPathComponent("id_ed25519")
-        )
+        let engine = engineWith(store)
         runner.outcomes = [
             RsyncOutcome(status: 12, items: [], errorLines: ["kaputt"], statsLines: [])
         ]
@@ -363,6 +387,113 @@ final class SyncEngineTests {
             rsyncPath: "/usr/bin/rsync", inventoryComplete: false
         )
         #expect(runner.plans.count == 1)
+    }
+
+    // MARK: - Mehrere Rechner
+
+    @Test("Läuft auf dem Ziel schon jemand, startet kein zweiter Lauf")
+    func aBusyTargetBlocksTheRun() async throws {
+        remote.claimAnswer = .taken
+        remote.files[SyncLock.directory + "/wer"] = Data("M2\n\(ISO8601DateFormatter().string(from: Date()))\n".utf8)
+
+        await #expect(throws: SyncEngineError.self) {
+            _ = try await self.engine.transfer(
+                profile: self.profile, password: nil, direction: .push,
+                includeDeletes: false, expectedItems: 0, rsyncPath: "/usr/bin/rsync"
+            )
+        }
+        // Vor jedem rsync: Zwei Läufe gleichzeitig räumen sich gegenseitig
+        // Dateien weg, die der andere eben geschrieben hat.
+        #expect(runner.plans.isEmpty)
+    }
+
+    @Test("Nach dem Lauf ist die Sperre wieder frei")
+    func theLockIsReleasedAfterTheRun() async throws {
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 0, rsyncPath: "/usr/bin/rsync"
+        )
+        #expect(remote.claimed == [SyncLock.directory])
+        #expect(remote.removed.contains { $0.names == ["lock"] && $0.directory == ".synctool" })
+    }
+
+    /// Sonst legte ein einziger Fehlschlag das Profil fuer eine Stunde still.
+    @Test("Auch nach einem Fehlschlag ist die Sperre wieder frei")
+    func theLockIsReleasedAfterAFailure() async throws {
+        runner.outcomes = [
+            RsyncOutcome(status: 12, items: [], errorLines: ["kaputt"], statsLines: [])
+        ]
+        await #expect(throws: (any Error).self) {
+            _ = try await self.engine.transfer(
+                profile: self.profile, password: nil, direction: .push,
+                includeDeletes: false, expectedItems: 0, rsyncPath: "/usr/bin/rsync"
+            )
+        }
+        #expect(remote.removed.contains { $0.names == ["lock"] && $0.directory == ".synctool" })
+    }
+
+    /// Eine Sperre, die niemand mehr loest, legte das Profil fuer immer still.
+    @Test("Eine liegengebliebene Sperre wird übernommen")
+    func aStaleLockIsTakenOver() async throws {
+        remote.claimAnswer = .taken
+        let alt = Date().addingTimeInterval(-SyncLock.staleAfter - 60)
+        remote.files[SyncLock.directory + "/wer"] = Data(SyncLock.note(at: alt).utf8)
+
+        // Nach dem Wegräumen gelingt der zweite Griff.
+        remote.claimAnswer = .taken
+        await #expect(throws: SyncEngineError.self) {
+            _ = try await self.engine.transfer(
+                profile: self.profile, password: nil, direction: .push,
+                includeDeletes: false, expectedItems: 0, rsyncPath: "/usr/bin/rsync"
+            )
+        }
+        // Die alte Sperre wurde weggeräumt, auch wenn der zweite Griff hier
+        // wieder auf "belegt" trifft: die Attrappe antwortet immer gleich.
+        #expect(remote.removed.contains { $0.names == ["lock"] })
+    }
+
+    /// Antwortet die Gegenstelle gar nicht, darf daraus kein Nein werden: Geht
+    /// die Verbindung wirklich nicht, scheitert gleich darauf der Lauf selbst.
+    @Test("Eine unerreichbare Gegenstelle blockiert den Lauf nicht")
+    func anUnreachableTargetDoesNotBlock() async throws {
+        remote.claimAnswer = .unavailable
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 0, rsyncPath: "/usr/bin/rsync"
+        )
+        #expect(runner.plans.count == 1)
+    }
+
+    @Test("Der gemeinsame Stand landet nach dem Lauf auf dem Ziel")
+    func theSharedStateIsWrittenAfterTheRun() async throws {
+        let geprueft = Date(timeIntervalSince1970: 1_000_000)
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 0, checkedAt: geprueft,
+            rsyncPath: "/usr/bin/rsync"
+        )
+        let daten = try #require(remote.files[SharedState.fileName])
+        let stand = try #require(SharedState.decoded(daten))
+        #expect(stand.lastSync == geprueft)
+        #expect(stand.lastMachine == SharedState.machineName)
+    }
+
+    /// Stünde dort nach einem Fehlschlag nichts mehr, wäre die
+    /// Konflikterkennung auf allen Rechnern blind.
+    @Test("Ein Fehlschlag löscht den gemeinsamen letzten Abgleich nicht")
+    func aFailureKeepsTheSharedSyncTime() async throws {
+        let frueher = Date(timeIntervalSince1970: 1_000_000)
+        remote.files[SharedState.fileName] = try SharedState(
+            lastSync: frueher, commonPaths: [], lastMachine: "M1"
+        ).encoded()
+
+        runner.outcomes = [outcome([], status: 23)]
+        _ = try? await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 0, rsyncPath: "/usr/bin/rsync"
+        )
+        let stand = SharedState.decoded(remote.files[SharedState.fileName] ?? Data())
+        #expect(stand?.lastSync == frueher)
     }
 
     // MARK: - Die Übertragung folgt der Prüfung

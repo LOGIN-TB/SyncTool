@@ -5,15 +5,23 @@ import Foundation
 /// Ohne dieses Gedaechtnis sieht eine lokal geloeschte Datei genauso aus wie
 /// eine neue Datei auf dem Server: beide liegen nur auf einer Seite.
 public struct SyncInventory: Codable, Sendable {
-    /// Aktuelles Format. Frueher stand hier der komplette lokale Baum, auch
+    /// Aktuelles Format.
+    ///
+    /// 2 loeste, dass hier frueher der komplette lokale Baum stand, auch
     /// Dateien, die nie auf dem Server waren. Solche Dateien galten beim
     /// naechsten Pruefen als "auf dem Server geloescht" und verschwanden bei
-    /// einem Herunterladen mit Loeschen. Deshalb die Kennzeichnung.
-    public static let currentSchema = 2
+    /// einem Herunterladen mit Loeschen.
+    ///
+    /// 3 kommt vom Wechsel auf `-8` in den Bestandslaeufen: Die Pfade darin
+    /// standen bis dahin in openrsyncs maskierter Schreibweise, jetzt roh.
+    /// Beides nebeneinander liesse jeden Pfad mit Sonderzeichen einmal als
+    /// geloescht und einmal als neu erscheinen. Ein Bestand aus der Zeit davor
+    /// laeuft deshalb einmalig durch `healed`.
+    public static let currentSchema = 3
 
     public var paths: Set<String>
     public var capturedAt: Date
-    /// `nil` heisst: aus einer Version, die den lokalen Vollscan geschrieben hat.
+    /// `nil` oder kleiner als `currentSchema`: aus einer aelteren Fassung.
     public var schema: Int?
 
     public var isTrustworthy: Bool { schema == Self.currentSchema }

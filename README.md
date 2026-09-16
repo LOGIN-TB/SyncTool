@@ -175,6 +175,22 @@ einem Laufwerk, das gerade nicht verbunden ist, sieht rsync eine leere Seite und
 Quellseite nichts zu finden ist, obwohl beim letzten Abgleich dort Dateien
 lagen. Siehe [docs/loeschen.md](docs/loeschen.md).
 
+Was ein Lauf ersetzt oder löscht, legt die Empfängerseite 30 Tage lang unter
+`.synctool-versionen/` ab, mit demselben Pfad wie vorher.
+
+## Mehrere Rechner
+
+Mehrere Macs gegen dasselbe Ziel sind der Regelfall, für den SyncTool gebaut
+ist. Vor jedem Lauf greift es eine Sperre im Ziel, damit nie zwei gleichzeitig
+arbeiten: Zwei Läufe mit Löschen räumen sich sonst gegenseitig die Dateien weg,
+die der jeweils andere eben geschrieben hat. Wer zuletzt gelaufen ist, steht im
+Statusfenster.
+
+Ein Mehrschreiber-Sync ist es nicht. Ändern zwei Rechner dieselbe Datei, meldet
+SyncTool einen Konflikt und fasst sie in keiner Richtung an. Beide Fassungen
+bleiben stehen, bis jemand entscheidet. Siehe
+[docs/mehrere-rechner.md](docs/mehrere-rechner.md).
+
 ## Backup
 
 Ein Abgleich ist kein Backup: er hält beide Seiten auf demselben Stand, und

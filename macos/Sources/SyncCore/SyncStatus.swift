@@ -25,6 +25,13 @@ public struct DriftItem: Sendable, Hashable, Identifiable {
     public let remoteModified: Date?
     public let localModified: Date?
 
+    /// Der Pfad steht hier so, wie die Seite ihn meldet, von der der Eintrag
+    /// stammt, und genau so geht er auch an rsync.
+    ///
+    /// Das geht auf: `incoming` wandert beim Herunterladen, und dort ist die
+    /// Fernseite der Sender; `outgoing` beim Hochladen, dort ist es diese hier.
+    /// Fuer die Schutzregeln stimmt es ebenso, denn geschuetzt wird, was auf
+    /// der Empfaengerseite neu ist, und von dort stammt der Eintrag.
     public init(
         path: String,
         type: ItemType,
@@ -109,6 +116,25 @@ public struct SyncStatus: Sendable {
     /// Bestandsliste fort, deshalb hängen sie am Ergebnis der Prüfung.
     public let remotePaths: Set<String>
     public let localPaths: Set<String>
+    /// Wer zuletzt gegen dieses Ziel gelaufen ist, falls es ein anderer
+    /// Rechner war. `nil` heisst: niemand sonst, oder die Gegenstelle fuehrt
+    /// kein Buch.
+    ///
+    /// Beantwortet die Frage, die man sich bei mehreren Rechnern wirklich
+    /// stellt: Ist mein Stand der aktuelle, oder hat inzwischen jemand anders
+    /// gearbeitet?
+    public let lastRemoteRun: RemoteRun?
+
+    public struct RemoteRun: Sendable, Hashable {
+        public let machine: String
+        public let at: Date
+
+        public init(machine: String, at: Date) {
+            self.machine = machine
+            self.at = at
+        }
+    }
+
     /// Liefen beide Bestandslaeufe sauber durch?
     ///
     /// `false` heisst: Waehrend der Pruefung haben sich Dateien bewegt, und
@@ -154,7 +180,8 @@ public struct SyncStatus: Sendable {
             report: report,
             remotePaths: remotePaths,
             localPaths: localPaths,
-            inventoryComplete: inventoryComplete
+            inventoryComplete: inventoryComplete,
+            lastRemoteRun: lastRemoteRun
         )
     }
 
@@ -173,12 +200,18 @@ public struct SyncStatus: Sendable {
     }
 
     /// Beim Hochladen mit Löschen vor dem Wegräumen zu schützen: neu auf dem Server.
+    ///
     public var protectedOnPush: [String] {
         incoming.filter { $0.reason == .onlyRemote }.map(\.path)
     }
     /// Beim Herunterladen mit Löschen zu schützen: neu auf diesem Rechner.
     public var protectedOnPull: [String] {
         outgoing.filter { $0.reason == .onlyLocal }.map(\.path)
+    }
+
+    /// Die Pfade, die ein Lauf in dieser Richtung übertragen soll.
+    public func transferPaths(for direction: SyncDirection) -> [String] {
+        (direction == .pull ? incoming : outgoing).map(\.path)
     }
 
     public init(
@@ -193,7 +226,8 @@ public struct SyncStatus: Sendable {
         report: InventoryReport = InventoryReport(),
         remotePaths: Set<String> = [],
         localPaths: Set<String> = [],
-        inventoryComplete: Bool = true
+        inventoryComplete: Bool = true,
+        lastRemoteRun: RemoteRun? = nil
     ) {
         self.checkedAt = checkedAt
         self.lastSync = lastSync
@@ -207,6 +241,7 @@ public struct SyncStatus: Sendable {
         self.remotePaths = remotePaths
         self.localPaths = localPaths
         self.inventoryComplete = inventoryComplete
+        self.lastRemoteRun = lastRemoteRun
     }
 }
 
@@ -229,7 +264,8 @@ public enum DriftResolver {
         /// Repos, deren Zeiger auf beiden Seiten uebereinstimmen.
         settledGitBranches: Set<String> = [],
         excludedPaths: [String] = [],
-        checkedAt: Date = Date()
+        checkedAt: Date = Date(),
+        lastRemoteRun: SyncStatus.RemoteRun? = nil
     ) -> SyncStatus {
         var incoming: [DriftItem] = []
         var outgoing: [DriftItem] = []
@@ -254,7 +290,9 @@ public enum DriftResolver {
                     guard local.isComplete else { continue }
                     deletionsOnPush.append(deletion(entry))
                 } else {
-                    incoming.append(drift(entry, reason: .onlyRemote, remote: entry, local: nil))
+                    incoming.append(
+                        drift(entry, reason: .onlyRemote, remote: entry, local: nil)
+                    )
                 }
             case (nil, let entry?):
                 if entry.isDirectory && local.hasChildren(of: path) { continue }
@@ -264,7 +302,9 @@ public enum DriftResolver {
                     guard remote.isComplete else { continue }
                     deletionsOnPull.append(deletion(entry))
                 } else {
-                    outgoing.append(drift(entry, reason: .onlyLocal, remote: nil, local: entry))
+                    outgoing.append(
+                        drift(entry, reason: .onlyLocal, remote: nil, local: entry)
+                    )
                 }
             case (let remoteEntry?, let localEntry?):
                 switch compare(remote: remoteEntry, local: localEntry, lastSync: lastSync) {
@@ -328,7 +368,8 @@ public enum DriftResolver {
             ),
             remotePaths: remote.paths,
             localPaths: local.paths,
-            inventoryComplete: remote.isComplete && local.isComplete
+            inventoryComplete: remote.isComplete && local.isComplete,
+            lastRemoteRun: lastRemoteRun
         )
     }
 

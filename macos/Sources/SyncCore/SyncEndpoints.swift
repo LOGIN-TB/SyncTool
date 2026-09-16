@@ -62,11 +62,27 @@ public struct RsyncFlavour: Sendable, Equatable {
         self.usesRemoteShell = usesRemoteShell
     }
 
-    /// Der bisherige Weg. Muss unveraendert bleiben.
-    public static let sshRsync = RsyncFlavour(baseFlags: ["-rlptz"], usesRemoteShell: true)
+    /// Der bisherige Weg, plus eine Zeitschranke.
+    ///
+    /// `--timeout=900`: Ohne sie blockiert eine haengende Verbindung den Lauf
+    /// unbegrenzt, und das Statusfenster steht still, ohne zu sagen warum.
+    /// `ServerAliveInterval` in `SSHCommand.options` faengt nur die tote
+    /// TCP-Verbindung ab, nicht ein rsync, das bei lebender Leitung nicht
+    /// weiterkommt. Der Wert ist bewusst hoch: Die Dateilistenphase kann bei
+    /// dreissigtausend Eintraegen lange still sein, und ein Abbruch mitten im
+    /// Lauf ist teurer als ein paar Minuten Warten.
+    ///
+    /// Ohne `--contimeout`: Das gilt nur fuer die Verbindung zu einem
+    /// rsync-Daemon, und rsync 3.x lehnt die Zeile damit rundheraus ab, wenn
+    /// ueber ssh gearbeitet wird. Nachgemessen; openrsync nimmt es an, aber
+    /// eine Zeile, die nur mit einer Fassung laeuft, taugt nicht.
+    public static let sshRsync = RsyncFlavour(
+        baseFlags: ["-rlptz", "--timeout=900"], usesRemoteShell: true
+    )
 
     /// Ohne `-z`: bei einem Lauf im Dateisystem komprimiert das nur die Luft
-    /// und kostet Rechenzeit.
+    /// und kostet Rechenzeit. Und ohne Zeitschranke: Da gibt es keine Leitung,
+    /// die haengen koennte, und ein grosses Verzeichnis darf dauern.
     public static let local = RsyncFlavour(baseFlags: ["-rlpt"], usesRemoteShell: false)
 
     public static func forTransport(_ transport: Transport) -> RsyncFlavour {

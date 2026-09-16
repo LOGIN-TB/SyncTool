@@ -481,6 +481,48 @@ struct RsyncIntegrationTests {
         process.waitUntilExit()
     }
 
+    /// Der Befund, auf dem die Umstellung auf `-8` beruht.
+    ///
+    /// Im Code stand jahrelang, openrsync koenne das nicht, und deshalb lief
+    /// der Pruefpfad mit maskierten Namen: Ein Gedankenstrich wurde zu
+    /// `\#342\#200\#223`. Jede Schutz- und Filterregel, die aus so einem Pfad
+    /// entsteht, geht am echten Dateinamen vorbei.
+    @Test("Beide rsync-Fassungen geben mit -8 rohe Namen aus", arguments: TestRsync.all)
+    func bothFlavoursSupportRawNames(rsync: String) async throws {
+        let sandbox = try makeSandbox()
+        defer {
+            try? FileManager.default.removeItem(at: sandbox.source.deletingLastPathComponent())
+        }
+        let name = "Ümläut – Test.txt"
+        try "x".write(
+            to: sandbox.source.appendingPathComponent(name), atomically: true, encoding: .utf8
+        )
+
+        let leer = sandbox.source.deletingLastPathComponent().appendingPathComponent("leer")
+        try FileManager.default.createDirectory(at: leer, withIntermediateDirectories: true)
+
+        var pfade: [String] = []
+        _ = try await RsyncRunner().execute(
+            RsyncPlan(
+                executable: rsync,
+                arguments: RsyncArguments.inventoryArguments(
+                    profile: Profile(
+                        localRoot: sandbox.source.path, remotePath: sandbox.destination.path,
+                        transport: .localFolder
+                    ),
+                    options: .init(side: .local, emptyDirectory: leer.path)
+                ),
+                environment: [:]
+            ),
+            onLine: { line in
+                if let entry = ItemizeParser.parseInventoryLine(line, withChecksum: false) {
+                    pfade.append(entry.path)
+                }
+            }
+        )
+        #expect(pfade.contains(name), "gemeldet wurde: \(pfade)")
+    }
+
     @Test("--exclude-from greift")
     func excludesAreApplied() async throws {
         let sandbox = try makeSandbox()
@@ -721,8 +763,9 @@ struct LocalFolderEngineTests {
     }
 }
 
-/// Die ganze Suite braucht ein rsync 3.x: der Bestandslauf des Backups setzt
-/// `-8` fuer unmaskierte Namen, und openrsync kann das nicht.
+/// Die ganze Suite braucht ein rsync 3.x, aber nicht mehr wegen `-8`: Das kann
+/// openrsync, nachgemessen in "Beide rsync-Fassungen geben mit -8 rohe Namen
+/// aus". Was fehlt, ist das Pruefsummenfeld `%C`.
 /// Der Kern der Aenderung: ein Repo geht als Einheit hinueber, und der Lauf,
 /// der dafuer innerhalb von `.git` loescht, raeumt ausserhalb nichts weg.
 ///

@@ -23,6 +23,7 @@ public enum SyncEngineError: LocalizedError {
     case gitDeleteLimit(limit: Int)
     case deleteLimit(limit: Int, direction: SyncDirection)
     case incompleteInventory
+    case targetBusy(note: String)
 
     public var errorDescription: String? {
         switch self {
@@ -34,6 +35,11 @@ public enum SyncEngineError: LocalizedError {
             return "In den Git-Repos standen mehr als \(limit) Löschungen an. "
                 + "Mindestens ein .git ist deshalb nur halb übertragen. "
                 + "Noch einmal prüfen und den Lauf wiederholen."
+        case .targetBusy(let note):
+            let wer = note.split(separator: "\n").first.map(String.init) ?? "ein anderer Rechner"
+            return "Auf dem Ziel läuft gerade ein Abgleich von \(wer). "
+                + "Zwei Läufe gleichzeitig können sich gegenseitig Dateien wegräumen, "
+                + "die der jeweils andere eben geschrieben hat. Später noch einmal versuchen."
         case .incompleteInventory:
             return "Während der Prüfung haben sich Dateien bewegt, die Bestandsliste "
                 + "ist deshalb unvollständig. Auf dieser Grundlage wird nichts gelöscht: "
@@ -59,6 +65,9 @@ public final class SyncEngine {
     private let identity: URL
     /// Wo der Arbeitsordner eines Laufs ohne SSH-Sitzung entsteht.
     private let workspaceParent: URL
+    /// Wie der Motor an Sperre und gemeinsamen Stand im Zielordner kommt.
+    /// Einsetzbar, damit Tests nicht an echten ssh-Aufrufen haengen.
+    private let remoteFiles: (Profile, SSHSession?, SyncEndpoints) -> RemoteFiles?
 
     public init(
         runner: RsyncExecuting = RsyncRunner(),
@@ -66,7 +75,9 @@ public final class SyncEngine {
         inventoryStore: InventoryStore = InventoryStore(),
         knownHosts: URL = AppPaths.knownHostsFile,
         identity: URL = AppPaths.privateKeyFile,
-        workspaceParent: URL = FileManager.default.temporaryDirectory
+        workspaceParent: URL = FileManager.default.temporaryDirectory,
+        remoteFiles: @escaping (Profile, SSHSession?, SyncEndpoints) -> RemoteFiles? =
+            RemoteStore.make
     ) {
         self.runner = runner
         self.stateStore = stateStore
@@ -74,6 +85,7 @@ public final class SyncEngine {
         self.knownHosts = knownHosts
         self.identity = identity
         self.workspaceParent = workspaceParent
+        self.remoteFiles = remoteFiles
     }
 
     public func cancel() { runner.cancel() }
@@ -132,6 +144,35 @@ public final class SyncEngine {
             rsyncPath: rsyncPath, environment: context.environment, onLog: onLog
         )
 
+        // Der Stand der Gegenstelle wird gelesen, aber er entscheidet nichts.
+        //
+        // Das war anders gedacht und ist an einem Test gescheitert, der recht
+        // hatte: `knownPaths` beantwortet die Frage "stand dieser Pfad beim
+        // letzten Abgleich auf BEIDEN Seiten", und "beide" heisst hier: die
+        // Gegenstelle und *dieser* Rechner. Nimmt man dafuer den Bestand eines
+        // anderen Rechners, kippt die Antwort ins Gegenteil: Eine Datei, die A
+        // gerade erst hochgeladen hat, stuende in As Bestand, und B, der sie
+        // nie hatte, hielte sie fuer eine, die er selbst geloescht hat. Statt
+        // sie herunterzuladen, boete er an, sie drueben wegzuraeumen.
+        //
+        // Das lokale Gedaechtnis ist fuer diese Frage die richtige Quelle, und
+        // es beantwortet sie auch mit mehreren Rechnern richtig. Was zwischen
+        // Rechnern wirklich fehlte, ist nichts, was man ausrechnen kann,
+        // sondern dass nicht zwei gleichzeitig laufen. Dafuer gibt es die
+        // Sperre in `transfer`.
+        let shared = await SharedState.decoded(
+            (await remoteFiles(profile, session, context.endpoints)?
+                .read(SharedState.fileName)) ?? Data()
+        )
+        var lastRemoteRun: SyncStatus.RemoteRun?
+        if let shared, shared.lastMachine != SharedState.machineName {
+            lastRemoteRun = .init(machine: shared.lastMachine, at: shared.writtenAt)
+            onLog?(
+                "Zuletzt abgeglichen von \(shared.lastMachine), "
+                    + Format.timestamp(shared.writtenAt) + "."
+            )
+        }
+
         let status = DriftResolver.resolve(
             remote: remote,
             local: local,
@@ -149,7 +190,8 @@ public final class SyncEngine {
                 environment: context.environment,
                 endpoints: context.endpoints,
                 onLog: onLog
-            )
+            ),
+            lastRemoteRun: lastRemoteRun
         )
         onLog?(summary(for: status))
         return status
@@ -392,7 +434,12 @@ public final class SyncEngine {
         rsyncPath: String,
         /// `false` bei openrsync: die Fassung vertraegt `-b` und `--delete`
         /// nicht in derselben Zeile. Siehe `Options.backupFlags`.
-        supportsBackupWhileDeleting: Bool = true,
+        ///
+        /// `nil` heisst: selbst nachsehen. Das ist die Vorgabe, und zwar aus
+        /// Erfahrung: Stand hier `true` als Vorgabe, verlor ein Aufrufer, der
+        /// nichts uebergab, bei openrsync stillschweigend das Loeschen. Ein
+        /// Fehler, den man vergessen kann, ist einer, der passiert.
+        supportsBackupWhileDeleting: Bool? = nil,
         /// Liefen die Bestandslaeufe der zugrundeliegenden Pruefung sauber
         /// durch? Auf einer luckenhaften Liste wird nicht geloescht.
         inventoryComplete: Bool = true,
@@ -415,12 +462,6 @@ public final class SyncEngine {
         if includeDeletes, profile.deleteAllowed, !inventoryComplete {
             throw SyncEngineError.incompleteInventory
         }
-        // Vor der Anmeldung, nicht danach: der Abbruch kostet so keine
-        // Verbindung und keine Wartezeit.
-        try guardTarget(
-            profile: profile, direction: direction, includeDeletes: includeDeletes,
-            remotePaths: remotePaths, localPaths: localPaths, onLog: onLog
-        )
 
         let wanted: GitUnitState = direction == .pull ? .incoming : .outgoing
         let mirrored = gitUnits.filter { $0.state == wanted }.map(\.branch).sorted()
@@ -438,6 +479,34 @@ public final class SyncEngine {
         )
         defer { context.cleanup() }
 
+        let store = remoteFiles(profile, session, context.endpoints)
+        // Erst greifen, dann anfassen. Zwei Rechner, die gleichzeitig mit
+        // Loeschen hochladen, raeumen sich gegenseitig genau die Dateien weg,
+        // die der andere eben geschrieben hat.
+        //
+        // Kein `defer` fuers Loesen: Das darf nicht abgekoppelt in einem
+        // eigenen Task passieren, denn die Sitzung ist dann schon gestoppt und
+        // die Sperre bliebe liegen. Geloest wird deshalb von Hand, an jedem
+        // der beiden Ausgaenge.
+        let held = await claimTarget(store, onLog: onLog)
+        if case .taken(let note) = held {
+            throw SyncEngineError.targetBusy(note: note)
+        }
+        func release() async {
+            guard case .held = held, let store else { return }
+            try? await store.remove(["lock"], under: ".synctool")
+        }
+
+        do {
+            try await guardTarget(
+                profile: profile, direction: direction, includeDeletes: includeDeletes,
+                remotePaths: remotePaths, localPaths: localPaths, remote: store, onLog: onLog
+            )
+        } catch {
+            await release()
+            throw error
+        }
+
         let gitLimit = gitDeleteLimit(
             mirrored: mirrored, direction: direction,
             remotePaths: remotePaths, localPaths: localPaths, profile: profile
@@ -446,6 +515,18 @@ public final class SyncEngine {
         // Ein Ordner je Lauf, beide Laeufe teilen ihn sich. Wer eine Fassung
         // zurueckholen will, findet alles aus diesem Abgleich an einer Stelle.
         let backupDir = profile.backupKeepDays > 0 ? VersionFolder.path() : nil
+        // Nur nachsehen, wenn es darauf ankommt: Ohne Sicherung und ohne
+        // Loeschen spielt die Fassung hier keine Rolle, und ein
+        // `--version`-Aufruf waere umsonst.
+        let backupWhileDeleting: Bool
+        if let supportsBackupWhileDeleting {
+            backupWhileDeleting = supportsBackupWhileDeleting
+        } else if backupDir != nil, includeDeletes, profile.deleteAllowed {
+            backupWhileDeleting = !(await RsyncLocator.locate(preferred: rsyncPath)?
+                .isOpenRsync ?? true)
+        } else {
+            backupWhileDeleting = true
+        }
         let options = RsyncArguments.Options(
             dryRun: false,
             includeDeletes: includeDeletes,
@@ -458,7 +539,7 @@ public final class SyncEngine {
             gitMaxDelete: gitLimit,
             maxDelete: mainLimit,
             backupDir: backupDir,
-            supportsBackupWhileDeleting: supportsBackupWhileDeleting,
+            supportsBackupWhileDeleting: backupWhileDeleting,
             filesFromFile: context.filesFromFile
         )
 
@@ -509,9 +590,7 @@ public final class SyncEngine {
             )
         }
 
-        if backupDir != nil, includeDeletes, profile.deleteAllowed,
-            !supportsBackupWhileDeleting
-        {
+        if backupDir != nil, includeDeletes, profile.deleteAllowed, !backupWhileDeleting {
             onLog?(
                 "Dieser Lauf löscht und sichert deshalb nichts weg: openrsync "
                     + "hört mit Sicherungen still auf zu löschen. "
@@ -604,10 +683,40 @@ public final class SyncEngine {
             }
         } catch {
             record(succeeded: false)
+            await release()
             throw error
         }
 
-        record(succeeded: outcome.succeeded || outcome.isWarningOnly)
+        let geglueckt = outcome.succeeded || outcome.isWarningOnly
+        record(succeeded: geglueckt)
+        // Den gemeinsamen Stand mitschreiben, damit der naechste Rechner ihn
+        // vorfindet. Dieselben Zahlen wie lokal, nur an einem Ort, den alle
+        // lesen. Klappt es nicht, bleibt es beim lokalen Stand: Der Lauf hat
+        // seine Daten uebertragen, und das ist die Hauptsache.
+        if let store {
+            // Erst lesen, dann schreiben: Nach einem Fehlschlag darf der
+            // letzte Abgleich nicht verschwinden. Stuende dort danach nichts
+            // mehr, waere die Konflikterkennung auf allen Rechnern blind, und
+            // ein einziger abgebrochener Lauf haette das angerichtet.
+            let vorher = await SharedState.decoded(
+                (await store.read(SharedState.fileName)) ?? Data()
+            )
+            let stand = SharedState(
+                lastSync: geglueckt ? (checkedAt ?? Date()) : vorher?.lastSync,
+                // Der lokal fortgeschriebene Bestand, und der ist nach einem
+                // Fehlschlag die Schnittmenge, also die vorsichtige Richtung.
+                commonPaths: inventoryStore.load(for: profile)?.paths ?? [],
+                lastMachine: SharedState.machineName
+            )
+            do {
+                try await store.write(try stand.encoded(), to: SharedState.fileName)
+            } catch {
+                onLog?(
+                    "Der gemeinsame Stand ließ sich nicht schreiben: "
+                        + error.localizedDescription
+                )
+            }
+        }
         // Nur wenn dieser Lauf etwas gesichert haben kann. Eine Sicherung
         // entsteht beim Ersetzen und beim Loeschen, nicht bei einer neuen
         // Datei: Dort ist nichts da, was wegzulegen waere. Ohne neue Sicherung
@@ -616,11 +725,65 @@ public final class SyncEngine {
         let hatGesichert = outcome.items.contains { $0.kind == .updated || $0.kind == .deleted }
         if backupDir != nil, hatGesichert {
             await sweepVersions(
-                profile: profile, session: session, direction: direction,
+                profile: profile, direction: direction, remote: store,
                 endpoints: context.endpoints, onLog: onLog
             )
         }
+        // Als Letztes, wenn nichts mehr auf die Gegenstelle zugreift.
+        await release()
         return outcome
+    }
+
+    /// Greift die Sperre auf der Gegenstelle.
+    ///
+    /// `true` heisst: Dieser Lauf hat sie und muss sie wieder loesen. `true`
+    /// auch dann, wenn es gar keine Gegenstelle zum Sperren gibt: Ohne Ziel
+    /// gibt es nichts, was zwei Laeufe durcheinanderbringen koennten, und ein
+    /// Lauf soll nicht daran scheitern.
+    ///
+    /// Eine liegengebliebene Sperre wird uebernommen. Ein abgestuerzter Lauf
+    /// kann seine nicht aufraeumen, und eine Sperre, die niemand mehr loest,
+    /// legte das Profil fuer immer still.
+    private enum Claim {
+        /// Dieser Lauf haelt die Sperre und muss sie wieder loesen.
+        case held
+        /// Es gibt nichts zu sperren, oder es war nicht nachzusehen.
+        case free
+        case taken(note: String)
+    }
+
+    private func claimTarget(_ store: RemoteFiles?, onLog: ((String) -> Void)?) async -> Claim {
+        guard let store else { return .free }
+
+        func note() async -> String {
+            (await store.read(SyncLock.directory + "/wer")).map {
+                String(decoding: $0, as: UTF8.self)
+            } ?? ""
+        }
+        func mark() async {
+            try? await store.write(Data(SyncLock.note().utf8), to: SyncLock.directory + "/wer")
+        }
+
+        switch await store.claim(SyncLock.directory) {
+        case .claimed:
+            await mark()
+            return .held
+        case .unavailable:
+            // Nicht nachzusehen. Scheitert die Verbindung wirklich, faellt
+            // gleich darauf der Lauf selbst, und zwar mit einer Meldung, die
+            // den Grund nennt.
+            return .free
+        case .taken:
+            let vorhanden = await note()
+            guard SyncLock.isStale(vorhanden) else { return .taken(note: vorhanden) }
+            onLog?("Eine liegengebliebene Sperre auf dem Ziel wird übernommen.")
+            try? await store.remove(["lock"], under: ".synctool")
+            guard case .claimed = await store.claim(SyncLock.directory) else {
+                return .taken(note: vorhanden)
+            }
+            await mark()
+            return .held
+        }
     }
 
     /// Raeumt Sicherungsordner weg, die aelter sind als das Profil erlaubt.
@@ -632,65 +795,30 @@ public final class SyncEngine {
     /// stehenblieb. Was nicht klappt, steht im Protokoll.
     ///
     /// Das Alter kommt aus dem Ordnernamen, nicht aus dem Dateisystem. Ueber
-    /// ssh gaebe es dafuer ein zweites Kommando, und ein Name, den diese App
-    /// geschrieben hat, traegt das Datum ohnehin. Was nicht nach einem eigenen
-    /// Ordner aussieht, bleibt unangetastet.
+    /// ssh gaebe es dafuer ein zweites Kommando, und ein Ordnername, den diese
+    /// App geschrieben hat, traegt das Datum ohnehin. Was nicht nach einem
+    /// eigenen Ordner aussieht, bleibt liegen.
     private func sweepVersions(
         profile: Profile,
-        session: SSHSession?,
         direction: SyncDirection,
+        remote: RemoteFiles?,
         endpoints: SyncEndpoints,
         onLog: ((String) -> Void)?
     ) async {
         guard profile.backupKeepDays > 0 else { return }
-        // Gesichert wird auf der Empfaengerseite, also dort wird geraeumt.
-        let receiverIsRemote = direction == .push
+        // Gesichert wird auf der Empfaengerseite, also wird dort geraeumt.
+        let store: RemoteFiles? =
+            direction == .push
+            ? remote
+            : RemoteStore(backend: .fileSystem(URL(fileURLWithPath: endpoints.local)))
+        guard let store else { return }
 
+        let expired = VersionFolder.expired(
+            await store.list(VersionFolder.root), keepDays: profile.backupKeepDays
+        )
+        guard !expired.isEmpty else { return }
         do {
-            let names: [String]
-            if receiverIsRemote, let session {
-                let root = (remoteRoot(profile) as NSString)
-                    .appendingPathComponent(VersionFolder.root)
-                // `|| true`: Fehlt der Ordner, ist nichts zu raeumen, und das
-                // ist kein Fehler. `ls` allein liefe sonst auf Status 1.
-                let result = try await session.runRemote(
-                    "ls -1 \(SSHCommand.shellQuote(root)) 2>/dev/null || true",
-                    // Kuerzer als die Vorgabe: Die Daten liegen schon, das
-                    // Aufraeumen darf den Lauf nicht lange aufhalten. Was hier
-                    // nicht klappt, klappt beim naechsten Mal.
-                    timeout: 20
-                )
-                names = result.standardOutput.split(separator: "\n").map(String.init)
-            } else {
-                let root = URL(
-                    fileURLWithPath: receiverIsRemote ? endpoints.remote : endpoints.local
-                ).appendingPathComponent(VersionFolder.root)
-                names =
-                    (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
-            }
-
-            let expired = VersionFolder.expired(names, keepDays: profile.backupKeepDays)
-            guard !expired.isEmpty else { return }
-
-            if receiverIsRemote, let session {
-                let root = (remoteRoot(profile) as NSString)
-                    .appendingPathComponent(VersionFolder.root)
-                let paths = expired.map {
-                    SSHCommand.shellQuote((root as NSString).appendingPathComponent($0))
-                }
-                _ = try await session.runRemote(
-                    "rm -rf \(paths.joined(separator: " "))", timeout: 20
-                )
-            } else {
-                let root = URL(
-                    fileURLWithPath: receiverIsRemote ? endpoints.remote : endpoints.local
-                ).appendingPathComponent(VersionFolder.root)
-                for name in expired {
-                    try? FileManager.default.removeItem(
-                        at: root.appendingPathComponent(name)
-                    )
-                }
-            }
+            try await store.remove(expired, under: VersionFolder.root)
             onLog?(
                 "\(expired.count) Sicherungsordner älter als "
                     + "\(profile.backupKeepDays) Tage weggeräumt."
@@ -700,10 +828,6 @@ public final class SyncEngine {
         }
     }
 
-    private func remoteRoot(_ profile: Profile) -> String {
-        profile.remotePath.hasSuffix("/")
-            ? String(profile.remotePath.dropLast()) : profile.remotePath
-    }
 
     /// Fuegt die Ergebnisse beider Laeufe zusammen. Der schlechtere Status
     /// gewinnt, damit ein Fehler im zweiten Lauf nicht hinter der Null des
@@ -732,19 +856,31 @@ public final class SyncEngine {
         includeDeletes: Bool,
         remotePaths: Set<String>,
         localPaths: Set<String>,
+        remote: RemoteFiles?,
         onLog: ((String) -> Void)?
-    ) throws {
+    ) async throws {
         let source = direction == .push ? localPaths : remotePaths
         let destination = direction == .push ? remotePaths : localPaths
+        // Die Kennung liegt im Ziel und wandert nicht mit: `.synctool-ziel`
+        // steht in `Profile.systemExcludes`. Damit laesst sich ein Ordner
+        // wiedererkennen, und ein Lauf gegen den falschen faellt auf, bevor er
+        // etwas anfasst. `nil` heisst: nicht nachzusehen, und daraus wird kein
+        // Nein, sonst blockierte jede Stoerung den Lauf.
+        var markerFound: Bool?
+        if !profile.targetMarkerID.isEmpty, let remote {
+            if let daten = await remote.read(TargetMarker.fileName) {
+                let gelesen = String(decoding: daten, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                markerFound = gelesen == profile.targetMarkerID
+            }
+        }
         let facts = TargetFacts(
             direction: direction,
             sourcePathCount: source.count,
             destinationPathCount: destination.count,
             rememberedPathCount: inventoryStore.load(for: profile)?.paths.count ?? 0,
             expectedMarker: profile.targetMarkerID,
-            // Wird noch nicht nachgesehen. Die Kennung kommt mit den
-            // eingehaengten Zielen.
-            markerFound: nil
+            markerFound: markerFound
         )
         // Dieselbe Bedingung wie in RsyncArguments: der Aufrufer muss loeschen
         // wollen, und das Profil muss es erlauben.

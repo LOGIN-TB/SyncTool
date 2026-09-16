@@ -367,4 +367,48 @@ struct DriftResolverTests {
         )
         #expect(status.inventoryComplete)
     }
+
+    // MARK: - Unicode
+
+    /// Der Mac legt ueber den Finder NFD an, eine Datei, die auf der
+    /// Linux-Seite entsteht, kommt in NFC. Das sind verschiedene Bytes, und in
+    /// vielen Sprachen waeren es zwei Eintraege, einer "nur hier" und einer
+    /// "nur drueben"; mit Gedaechtnis und Loeschen wuerde daraus eine Loeschung
+    /// der jeweils anderen Schreibweise.
+    ///
+    /// Swift vergleicht Zeichenketten kanonisch aequivalent, und `Dictionary`,
+    /// `Set` und `hasPrefix` tun es ebenso. Hier steht, dass sich dieser Code
+    /// darauf verlaesst. Wer die Bestaende je auf Bytes umstellt, faellt ueber
+    /// diesen Test, und das ist der Zweck.
+    @Test("Dieselbe Datei in NFC und NFD ist eine Datei")
+    func nfcAndNfdAreTheSameFile() {
+        let nfc = "Ümläut.txt".precomposedStringWithCanonicalMapping
+        let nfd = "Ümläut.txt".decomposedStringWithCanonicalMapping
+        // Vorbedingung: Die beiden Schreibweisen bestehen aus verschiedenen
+        // Bytes. Sonst prüfte der Test nichts.
+        #expect(Array(nfc.utf8) != Array(nfd.utf8))
+
+        let status = DriftResolver.resolve(
+            remote: side([entry(nfc)]), local: side([entry(nfd)]), lastSync: base
+        )
+        #expect(status.incoming.isEmpty)
+        #expect(status.outgoing.isEmpty)
+        #expect(status.conflicts.isEmpty)
+        #expect(status.deletionsOnPull.isEmpty)
+        #expect(status.deletionsOnPush.isEmpty)
+        #expect(status.isInSync)
+    }
+
+    /// An rsync geht der Name, den die Senderseite gemeldet hat. Umgeschrieben
+    /// legte er auf der Gegenseite eine zweite Datei an, statt die vorhandene
+    /// zu treffen.
+    @Test("An rsync geht die Schreibweise der Senderseite")
+    func rsyncGetsTheSpellingOfTheSender() {
+        let nfd = "Ümläut.txt".decomposedStringWithCanonicalMapping
+        let status = DriftResolver.resolve(
+            remote: side([]), local: side([entry(nfd)]), lastSync: nil
+        )
+        #expect(Array(status.transferPaths(for: .push).first!.utf8) == Array(nfd.utf8))
+        #expect(Array(status.protectedOnPull.first!.utf8) == Array(nfd.utf8))
+    }
 }

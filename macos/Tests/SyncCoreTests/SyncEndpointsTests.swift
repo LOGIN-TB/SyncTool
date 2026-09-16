@@ -79,11 +79,16 @@ struct SyncEndpointsTests {
 
     // MARK: - Flag-Politik
 
-    /// Golden-Test. Der Umbau von einer Konstante auf einen Wert darf die
-    /// bestehende Zeile nicht um ein Zeichen verschieben.
+    /// Golden-Test. Was hier steht, steht in jeder Zeile, die ueber ssh geht,
+    /// und aendert sich nicht nebenbei.
+    ///
+    /// `--timeout=900` kam dazu, weil eine haengende Verbindung den Lauf sonst
+    /// unbegrenzt blockiert. Kein `--contimeout`: Das gilt nur fuer einen
+    /// rsync-Daemon, und rsync 3.x lehnt die Zeile damit ab.
     @Test("Die ssh-Flags stehen fest")
     func sshFlavourIsFrozen() {
-        #expect(RsyncFlavour.sshRsync.baseFlags == ["-rlptz"])
+        #expect(RsyncFlavour.sshRsync.baseFlags == ["-rlptz", "--timeout=900"])
+        #expect(!RsyncFlavour.sshRsync.baseFlags.contains { $0.hasPrefix("--contimeout") })
         #expect(RsyncFlavour.sshRsync.usesRemoteShell)
         #expect(RsyncFlavour.forTransport(.sshRsync) == .sshRsync)
     }
