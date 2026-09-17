@@ -79,15 +79,15 @@ public enum MenuBarGeometry {
     /// ein paar Punkte zu viel sind harmlos. Ein paar zu wenig waeren es nicht.
     public static let chromeHeight: CGFloat = 200
 
-    /// Ab hier ist ein Rollbalken die freundlichere Loesung.
+    /// So hoch ist der Mittelteil, sobald ein Pruefergebnis dasteht.
     ///
-    /// 560 Punkt sind an den gemessenen Faellen ausgerichtet: Ein volles
+    /// 520 Punkt sind an den gemessenen Faellen ausgerichtet: Ein volles
     /// Pruefergebnis mit zugeklappten Abschnitten braucht rund 485 und bleibt
     /// damit ohne Rollbalken. Wer einen Abschnitt aufklappt, bekommt einen, und
-    /// das ist gewollt. Ein Fenster, das dabei auf ueber 1300 Punkt waechst,
-    /// ist keine Hilfe: Es laeuft oben aus dem Bildschirm, und dann ist der
-    /// Pfeil zum Zuklappen nicht mehr da.
-    public static let preferredContentHeight: CGFloat = 560
+    /// das ist gewollt. Ein Fenster, das stattdessen auf ueber 1300 Punkt
+    /// waechst, ist keine Hilfe: Es laeuft oben aus dem Bildschirm, und dann
+    /// ist der Pfeil zum Zuklappen nicht mehr da.
+    public static let preferredContentHeight: CGFloat = 520
 
     /// Die groesste Hoehe, die der Mittelteil einnehmen darf.
     ///

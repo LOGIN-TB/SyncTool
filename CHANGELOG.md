@@ -106,17 +106,21 @@
   kein Fenster. Von außen sieht das aus wie ein Absturz, und nach jedem
   Neubauen fragt macOS erneut. Gelesen wird jetzt im Hintergrund, und wer das
   Passwort braucht, wartet darauf.
-- **Das Fenster bleibt unter seinem Symbol**, auch wenn Abschnitte auf- und
-  zugeklappt werden. Es wächst nach unten und schrumpft wieder, nur über den
-  Bildschirmrand hinaus wächst es nicht mehr: Ab dort rückt macOS es nach oben
-  weg, und beim Zuklappen rückt es nicht zurück. Genau das war der Fehler.
-  Nachträglich zurechtrücken lässt es sich nicht, denn unter macOS 26 gehört
-  das Popover einer `MenuBarExtra` nicht mehr zum eigenen Prozess; es steht in
-  keiner Fensterliste und meldet keine Größenänderung.
+- **Das Fenster bleibt unter seinem Symbol.** Auf- und Zuklappen ändert seine
+  Größe nicht mehr: Sobald ein Prüfergebnis dasteht, hat der Mittelteil eine
+  feste Höhe und einen Bildlauf. Vorher wuchs das Fenster mit jedem
+  aufgeklappten Abschnitt über den Bildschirmrand hinaus, und ab dort rückt
+  macOS es nach oben weg. Beim Zuklappen rückt es nicht zurück, und der Pfeil
+  zum Zuklappen war dann nicht mehr erreichbar. Nachträglich zurechtrücken
+  lässt sich das Fenster nicht: Unter macOS 26 gehört das Popover einer
+  `MenuBarExtra` nicht mehr zum eigenen Prozess, es steht in keiner
+  Fensterliste und meldet keine Größenänderung.
+- **Vor der ersten Prüfung bleibt das Fenster klein.** Die feste Höhe gilt
+  erst, wenn es etwas anzuzeigen gibt.
 - **Ein Rollbalken statt zwei.** Die langen Listen hatten jede ihre eigene
   Scrollfläche. Sobald der ganze Mittelteil scrollte, lagen zwei Rollbalken
-  übereinander. Jetzt scrollt nur noch der Mittelteil, und auch der erst ab
-  einer Höhe, bei der ein Rollbalken die freundlichere Lösung ist. Ein volles
+  übereinander. Jetzt scrollt nur noch der Mittelteil, und ein Rollbalken
+  erscheint nur, wenn der Inhalt wirklich länger ist. Ein volles
   Prüfergebnis mit zugeklappten Abschnitten bleibt ohne.
 - **Der Unterschied zwischen den beiden Bestandszahlen ist belegt statt
   behauptet.** Vorher verglich die App zwei Zahlen: Zieh die Repos ab, dann

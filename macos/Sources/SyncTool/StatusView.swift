@@ -25,8 +25,6 @@ struct StatusView: View {
     /// Siehe `MenuBarGeometry.maxContentHeight`.
     var maxContentHeight: CGFloat?
 
-    /// Die natuerliche Hoehe des Mittelteils. Siehe `scrollingContent`.
-    @State private var contentHeight: CGFloat = 0
     @State private var showLog = false
     @State private var deleteOnTransfer = false
     @State private var pendingDeletion: PendingDeletion?
@@ -98,13 +96,24 @@ struct StatusView: View {
         }
     }
 
-    /// Der Mittelteil. Waechst mit dem Inhalt und scrollt erst, wenn es sonst
-    /// nicht mehr auf den Bildschirm passt.
+    /// Der Mittelteil. Vor der ersten Pruefung so hoch wie sein Inhalt, danach
+    /// mit fester Hoehe und Bildlauf.
     ///
-    /// Gemessen statt geschaetzt: Die Ansicht meldet ihre natuerliche Hoehe
-    /// nach oben, und erst wenn die ueber der Grenze liegt, kommt eine
-    /// Scrollflaeche darum. Solange sie darunter bleibt, gibt es keine, und
-    /// damit auch keinen Rollbalken, der ohne Not dasteht.
+    /// Die Entscheidung haengt bewusst an den Daten und nicht am Layout. Der
+    /// Anlauf davor hat die natuerliche Hoehe gemessen und daraufhin
+    /// umgeschaltet. Im eigenen Fenster ging das, im Popover der Menueleiste
+    /// nicht: Das gehoert unter macOS 26 zu einem anderen Prozess, und der
+    /// zweite Durchgang, in dem die Messung erst wirksam wird, kam dort nie an.
+    /// Das Fenster blieb in der ungebremsten Fassung stehen und wuchs auf ueber
+    /// 1600 Punkt.
+    ///
+    /// Was hier entschieden wird, steht deshalb vor dem ersten Zeichnen fest:
+    /// Gibt es ein Pruefergebnis, ist der Mittelteil genau `maxContentHeight`
+    /// hoch. Gibt es keins, hat er fast nichts anzuzeigen, und dann waere eine
+    /// feste Hoehe nur ein grosses leeres Fenster.
+    ///
+    /// Ein Rollbalken erscheint dabei nur, wenn der Inhalt wirklich laenger
+    /// ist. Ein volles Pruefergebnis mit zugeklappten Abschnitten passt.
     @ViewBuilder
     private var scrollingContent: some View {
         let inner =
@@ -112,16 +121,8 @@ struct StatusView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, inset)
             .padding(.vertical, 12)
-            .background(
-                GeometryReader { geo in
-                    Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
-                }
-            )
-            .onPreferenceChange(ContentHeightKey.self) { hoehe in
-                contentHeight = hoehe
-            }
 
-        if let grenze = maxContentHeight, contentHeight > grenze {
+        if let grenze = maxContentHeight, state.status != nil {
             ScrollView {
                 inner
             }
@@ -1207,11 +1208,3 @@ struct Banner: View {
     }
 }
 
-
-/// Die gemessene Hoehe des Mittelteils, von unten nach oben gereicht.
-private struct ContentHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}

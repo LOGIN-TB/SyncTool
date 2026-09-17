@@ -112,8 +112,8 @@ struct MenuBarGeometryTests {
     @Test(
         "Der Mittelteil bleibt im Bildschirm",
         arguments: [
-            (1415.0, 560.0),  // grosser Bildschirm: die Wunschhöhe
-            (900.0, 560.0),  // Notebook: immer noch die Wunschhöhe
+            (1415.0, 520.0),  // grosser Bildschirm: die Wunschhöhe
+            (900.0, 520.0),  // Notebook: immer noch die Wunschhöhe
             (700.0, 500.0),  // klein: der Bildschirm entscheidet
             (400.0, 240.0),  // sehr klein: die Untergrenze gewinnt
         ] as [(CGFloat, CGFloat)]
