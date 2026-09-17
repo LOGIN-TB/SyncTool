@@ -5,18 +5,26 @@ import SyncCore
 @main
 struct SyncToolApp: App {
     @StateObject private var state = AppState()
+    @State private var windowKeeper = MenuBarWindowKeeper()
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         MenuBarExtra {
-            StatusView(state: state, anchoredBelowMenuBar: true)
+            StatusView(state: state)
         } label: {
             // Der Anker fuer die Startargumente. Das Symbol der Menueleiste ist
             // das Einzige, was bei einer LSUIElement-App verlaesslich beim Start
             // erzeugt wird: die Fensterszenen entstehen erst, wenn jemand sie
             // oeffnet, und ein `.task` darin liefe deshalb nie.
             Image(systemName: state.menuBarSymbol)
-                .task { StartupWindows.open(openWindow, state: state) }
+                .task {
+                    // Haelt das Popover unter seinem Symbol, wenn der Inhalt
+                    // waechst. Bewusst hier und nicht in `StatusView`: Der
+                    // Beobachter darf nicht an der Lebensdauer einer Ansicht
+                    // haengen, daran sind drei Anlaeufe gescheitert.
+                    windowKeeper.start()
+                    StartupWindows.open(openWindow, state: state)
+                }
         }
         .menuBarExtraStyle(.window)
 

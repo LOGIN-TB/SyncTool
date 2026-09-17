@@ -83,6 +83,13 @@
 
 ### Statusfenster
 
+- **Der Abgleich mit der Gegenstelle sagt jetzt, dass er läuft.** Vorher setzte
+  er keine Phase: Der Knopf blieb aktiv, das Symbol drehte sich nicht, und weil
+  jedes Repo einmal beim Anbieter nachfragt, dauerte das bei zwanzig Repos
+  Minuten, in denen nichts zu sehen war. Jetzt steht dort ein Balken mit „Repo
+  3 von 21" und dem Namen.
+
+
 - **Nach einem erfolgreichen Abgleich stehen links und rechts dieselben
   Zahlen.** Roh gezählt taten sie das nie und konnten es auch nicht: Zwei
   Rechner auf demselben Stand haben verschieden viele Dateien unter `.git/`,

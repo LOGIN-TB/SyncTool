@@ -13,9 +13,6 @@ struct StatusView: View {
         state.selectedProfile?.transport.remoteLabelInPlace ?? "im Ziel"
     }
     @ObservedObject var state: AppState
-    /// Nur fuer das Fenster an der Menueleiste. Die gleichnamige Szene fuer die
-    /// Bildschirmfoto-Werkstatt ist ein gewoehnliches Fenster und bleibt aus.
-    var anchoredBelowMenuBar: Bool = false
     @Environment(\.openWindow) private var openWindow
 
     @State private var showLog = false
@@ -74,10 +71,6 @@ struct StatusView: View {
         // `.background(.thickMaterial)` ersetzen und die weichere Schrift
         // in Kauf nehmen.
         .background(Color(nsColor: .windowBackgroundColor))
-        // Bewusst keine Hoehenangabe, siehe den Kommentar ueber `body`. Das
-        // Fenster darf mit dem Inhalt wachsen, es soll dabei nur nicht unter
-        // dem Symbol wegwandern.
-        .anchoredBelowMenuBar(anchoredBelowMenuBar)
         .onChange(of: state.selectedProfileID) { _, _ in
             // Beide haengen am Profil: ein fuer A gesetzter Haken darf nach dem
             // Umschalten auf B nicht stehen bleiben, B erlaubt womoeglich gar
@@ -200,6 +193,26 @@ struct StatusView: View {
                 ProgressView().controlSize(.small)
                 Text("Bestand aufnehmen …")
                     .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        } else if case .reconciling(let done, let total, let name) = state.phase {
+            // Jedes Repo kostet ein `fetch` ueber das Netz. Ohne Zaehler sieht
+            // es aus, als passiere nichts, und bei zwanzig Repos dauert das
+            // Minuten.
+            VStack(alignment: .leading, spacing: 8) {
+                ProgressView(value: Double(done), total: Double(max(total, 1)))
+                    .progressViewStyle(.linear)
+                Text(
+                    name.isEmpty
+                        ? "Repos mit der Gegenstelle abgleichen …"
+                        : "\(name) · \(done) von \(total)"
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                Text("Für jedes Repo wird einmal beim Anbieter nachgefragt.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
         } else if let backup = state.lastBackup {
@@ -438,6 +451,9 @@ struct StatusView: View {
             }
             .controlSize(.large)
             .buttonStyle(.bordered)
+            // Sonst laesst sich der Abgleich ein zweites Mal anstossen,
+            // waehrend der erste noch laeuft.
+            .disabled(state.phase.isBusy)
             .disabled(state.phase.isBusy)
         }
     }

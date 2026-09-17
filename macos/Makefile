@@ -1,6 +1,6 @@
 CONFIG ?= release
 
-.PHONY: app app-native install run test build clean icon version release
+.PHONY: app app-native install run test anchor-check build clean icon version release
 
 app:
 	@bash Scripts/bundle.sh
@@ -43,6 +43,23 @@ test:
 	else \
 		swift test; \
 	fi
+
+
+# Prueft die Fensterlage des Popovers. Braucht einen Bildschirm, laeuft also
+# nicht in der CI. Siehe den Kopf von Scripts/anchor-check.swift: Hier sind
+# drei Anlaeufe gescheitert, und die Rechnung allein reicht als Beleg nicht.
+anchor-check:
+	@mkdir -p build/anchor
+	@# Ohne `import SyncCore`: Hier wird alles in einem Zug uebersetzt, ein
+	@# Modul gibt es dabei nicht.
+	@sed 's/^import SyncCore$$//' Sources/SyncTool/MenuBarWindowAnchor.swift \
+		> build/anchor/Anchor.swift
+	@# Muss `main.swift` heissen: Nur dort erlaubt Swift Code auf oberster Ebene.
+	@cp Scripts/anchor-check.swift build/anchor/main.swift
+	@swiftc -o build/anchor/anchor-check \
+		-target $(shell uname -m)-apple-macos14.0 -swift-version 5 \
+		Sources/SyncCore/*.swift build/anchor/Anchor.swift build/anchor/main.swift
+	@SYNCTOOL_SUPPORT_DIR=build/anchor ./build/anchor/anchor-check
 
 # Das Symbol aendert sich praktisch nie, deshalb ein eigenes Ziel und nicht
 # bei jedem Bau. Die erzeugte .icns liegt als Datei im Projekt.

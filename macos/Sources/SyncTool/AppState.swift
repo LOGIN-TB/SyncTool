@@ -31,11 +31,15 @@ enum Phase: Equatable {
     case checking
     case transferring(SyncDirection)
     case backingUp
+    /// Der Abgleich mit der Gegenstelle, mit Zaehler: Jedes Repo kostet ein
+    /// `fetch` ueber das Netz, und ohne Zaehler sieht es aus, als passiere
+    /// nichts.
+    case reconciling(done: Int, total: Int, name: String)
     case failed(String)
 
     var isBusy: Bool {
         switch self {
-        case .checking, .transferring, .backingUp: return true
+        case .checking, .transferring, .backingUp, .reconciling: return true
         case .idle, .failed: return false
         }
     }
@@ -740,14 +744,24 @@ final class AppState: ObservableObject {
                 ).archive
             }
         )
+        phase = .reconciling(done: 0, total: roots.count, name: "")
         let results = await sync.run(
             roots: roots,
             localRoot: profile.localRoot,
             onLog: { [weak self] line in
                 Task { @MainActor in self?.append(line) }
+            },
+            onProgress: { [weak self] done, total, name in
+                Task { @MainActor in
+                    self?.phase = .reconciling(done: done, total: total, name: name)
+                }
             }
         )
         gitResults = Dictionary(uniqueKeysWithValues: results.map { ($0.root, $0) })
+        // Nur zuruecksetzen, wenn wir die Phase auch gesetzt haben: Nach einer
+        // Uebertragung laeuft das hier im Anschluss, und dort soll der Ablauf
+        // weiterlaufen, statt an dieser Stelle auf "fertig" zu springen.
+        if case .reconciling = phase { phase = .idle }
 
         let summary = GitSync.summary(of: results)
         if !quiet {
@@ -844,6 +858,7 @@ final class AppState: ObservableObject {
     var menuBarSymbol: String {
         switch phase {
         case .checking, .transferring: return "arrow.triangle.2.circlepath"
+        case .reconciling: return "arrow.triangle.branch"
         case .backingUp: return "archivebox"
         case .failed: return "xmark.octagon"
         case .idle:

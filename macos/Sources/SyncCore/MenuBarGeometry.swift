@@ -10,12 +10,15 @@ import Foundation
 public enum MenuBarGeometry {
     /// Abstand zur Menueleiste, wenn nichts gemessen wurde.
     ///
-    /// Eine Schaetzung und als solche gekennzeichnet. Sie greift nur, solange
-    /// keine verlaessliche Oberkante vorliegt, und liegt dann um ein paar Punkte
-    /// daneben statt um mehrere hundert. Das ist der ganze Zweck: Ohne
-    /// Ersatzwert bliebe das Fenster unkorrigiert, und unkorrigiert wandert es
-    /// bei jedem Aufklappen ueber den halben Bildschirm.
-    public static let assumedGap: CGFloat = 6
+    /// Ein Ersatzwert, der nur greift, solange keine verlaessliche Oberkante
+    /// vorliegt. Ohne ihn bliebe das Fenster in genau dem Fall unkorrigiert, in
+    /// dem es am meisten wandert.
+    ///
+    /// Die 2 sind gemessen und nicht geraten: Ein Lauf mit einem Fenster
+    /// derselben Bauart setzte die Oberkante auf `visibleFrame.maxY - 2`, und
+    /// dieselbe Zahl stand im Protokoll des echten Popovers. Vorher stand hier
+    /// eine 6, und das Fenster sass vier Punkte zu tief.
+    public static let assumedGap: CGFloat = 2
 
     /// Die Oberkante, an der das Fenster haengen soll.
     ///

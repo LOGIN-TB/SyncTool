@@ -64,6 +64,20 @@ und nicht auf sein Elternverzeichnis: mit vollem Xcode liegt es an anderer
 Stelle und SwiftPM findet es allein.
 
 ```bash
+make anchor-check
+```
+
+Prueft, ob das Menueleisten-Fenster beim Auf- und Zuklappen oben haengen
+bleibt. Braucht einen Bildschirm und laeuft deshalb nicht in der CI.
+
+Die reine Rechnung dahinter steht in `MenuBarGeometryTests`. Hier geht es um
+die Mechanik drumherum, und daran sind drei Anlaeufe gescheitert: ein Abstand,
+der gemessen wurde, bevor SwiftUI positioniert hatte; ein Anker, der auf
+Benachrichtigungen wartete, die ausbleiben koennen; und einer, der an einer
+nullgrossen Hintergrundansicht hing und nach dem ersten Mal nichts mehr mitbekam.
+Wer hier etwas aendert, laesst das Ziel einmal laufen.
+
+```bash
 make icon
 ```
 

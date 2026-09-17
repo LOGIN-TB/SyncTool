@@ -173,10 +173,16 @@ public final class GitSync {
     public func run(
         roots: [String],
         localRoot: String,
-        onLog: ((String) -> Void)? = nil
+        onLog: ((String) -> Void)? = nil,
+        /// Welches Repo gerade an der Reihe ist, und wie viele es sind.
+        ///
+        /// Jedes kostet ein `fetch` ueber das Netz. Bei zwanzig Repos sind das
+        /// Minuten, und ohne diese Meldung sieht es aus, als passiere nichts.
+        onProgress: ((Int, Int, String) -> Void)? = nil
     ) async -> [GitRepoResult] {
         var results: [GitRepoResult] = []
-        for root in roots {
+        for (index, root) in roots.enumerated() {
+            onProgress?(index + 1, roots.count, name(root))
             let directory = (localRoot as NSString).appendingPathComponent(root)
             do {
                 results.append(
