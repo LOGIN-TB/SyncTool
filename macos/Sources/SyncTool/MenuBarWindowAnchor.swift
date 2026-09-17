@@ -9,47 +9,53 @@ import SyncCore
 /// stehendem Ursprung an, und weil ein `NSWindow` seinen Ursprung unten links
 /// hat, wandert dabei die Oberkante nach oben.
 ///
-/// Vier Anlaeufe sind hier gescheitert, und jeder an einer Annahme ueber etwas,
-/// das niemand nachgesehen hatte.
+/// Fuenf Anlaeufe sind hier gescheitert, und die Reihenfolge ist lehrreich:
 ///
-/// Der erste hat den Abstand zur Menueleiste gemessen, bevor SwiftUI
-/// positioniert hatte. Der zweite hing an `didMove` und `didBecomeKey`, die
-/// beide ausbleiben koennen. Der dritte hing an einer nullgrossen
-/// Hintergrundansicht, die nach dem ersten Einhaengen nichts mehr mitbekam.
+///  1. Der Abstand zur Menueleiste wurde gemessen, bevor SwiftUI positioniert
+///     hatte. Die erste Korrektur machte den falschen Wert zur Wahrheit.
+///  2. Der Anker wartete auf `didMove` und `didBecomeKey`. Beide koennen
+///     ausbleiben, und dann wurde nie korrigiert.
+///  3. Der Anker hing an einer nullgrossen Hintergrundansicht. Sie wurde einmal
+///     eingehaengt, danach kam keine Groessenaenderung mehr an.
+///  4. Der Anker hoerte prozessweit zu, erkannte das Fenster aber an
+///     `Breite == 460`.
+///  5. Er erkannte es an `kein Titelbalken` und daran, dass der Klassenname
+///     weder "StatusBar" noch "Menu" enthaelt.
 ///
-/// Der vierte ist der lehrreiche: Er hoerte prozessweit zu, also an der
-/// richtigen Stelle, erkannte das Fenster aber an `Breite == 460` und
-/// `isVisible`. Im Protokoll stand danach keine einzige Nachfuehrung mehr,
-/// waehrend der Anlauf davor wenigstens eine geschafft hatte. Beide Merkmale
-/// waren geraten: `StatusView` ist 460 breit, das Fenster darum herum ist es
-/// nicht zwingend, und wer sagt, dass SwiftUI erst einblendet und dann die
-/// Groesse setzt.
+/// Vier und fuenf sind derselbe Fehler: eine Eigenschaft raten, statt sie
+/// nachzusehen. Deshalb entscheidet hier nur noch Geometrie, und die ist
+/// nachgemessen. Ein Menueleisten-Fenster ist gross genug, dass ein Verrutschen
+/// auffiele, und seine Oberkante haengt beim Erscheinen an der Menueleiste.
+/// Alles andere, vom Feld in der Leiste bis zu den eigenen Fenstern der App,
+/// faellt allein dadurch heraus.
 ///
-/// Deshalb erkennt dieser Anlauf das Fenster an dem, was ein
-/// Menueleisten-Fenster ausmacht und was wir selbst nachgemessen haben: Es hat
-/// keinen Titelbalken, es ist kein Menue und nicht das Feld in der Leiste
-/// selbst, es hat eine sinnvolle Groesse, und beim Erscheinen haengt es dicht
-/// unter der Menueleiste. Keine feste Zahl, die eine Aenderung an der Ansicht
-/// still ausser Kraft setzen koennte.
+/// Und weil aus dem Protokoll bisher nur abzulesen war, dass nichts passierte,
+/// schreibt der Anker jetzt jede Fensterliste mit, sobald sich etwas an ihr
+/// aendert: mit Klasse, Kennung, Stilmaske, Lage und Entscheidung. Wer das
+/// naechste Mal hier steht, muss nicht mehr raten.
 @MainActor
 final class MenuBarWindowKeeper {
+    /// Fenster, die SwiftUI aus den `Window`-Szenen baut. Die gehoeren nicht
+    /// unter die Menueleiste, auch wenn jemand sie dorthin schiebt.
+    static let ownSceneIdentifiers: Set<String> = ["settings", "status"]
+
     private var observers: [any NSObjectProtocol] = []
     /// Je Fenster die Oberkante, an der es haengen soll.
     private var tops: [ObjectIdentifier: CGFloat] = [:]
     /// Fenster, die gerade von uns verschoben werden.
     private var pending: Set<ObjectIdentifier> = []
-    /// Fenster, ueber die schon eine Zeile im Protokoll steht. Ohne das
-    /// schriebe jede Groessenaenderung dieselbe Auskunft erneut.
-    private var introduced: Set<ObjectIdentifier> = []
-    /// Das Sicherheitsnetz. Siehe `startTimer`.
+    /// Die Fensterlage beim letzten Bericht. Aendert sie sich, wird berichtet.
+    private var lastReport = ""
     private var timer: Timer?
+    /// Das Fenster, das die Statusansicht selbst gemeldet hat. Siehe `adopt`.
+    private weak var adopted: NSWindow?
     private let log = RunLog()
 
     func start() {
         guard observers.isEmpty else { return }
         let center = NotificationCenter.default
         // `object: nil`: alle Fenster dieses Prozesses. Welches gemeint ist,
-        // entscheidet `isStatusWindow`, und nicht die Frage, wer sich gerade
+        // entscheidet `isCandidate`, und nicht die Frage, wer sich gerade
         // angemeldet hat.
         observers = [
             center.addObserver(
@@ -82,7 +88,7 @@ final class MenuBarWindowKeeper {
     /// Schaut regelmaessig selbst nach, statt sich auf Benachrichtigungen zu
     /// verlassen.
     ///
-    /// Der Grund steht oben: Vier Anlaeufe sind daran gescheitert, dass eine
+    /// Der Grund steht oben: Mehrere Anlaeufe sind daran gescheitert, dass eine
     /// Benachrichtigung ausblieb oder ein Fenster nicht erkannt wurde, und
     /// jedes Mal sah es von aussen gleich aus, naemlich so, als passiere
     /// nichts. Ein Blick alle fuenf Zehntelsekunden kostet nichts und haengt an
@@ -103,38 +109,74 @@ final class MenuBarWindowKeeper {
         timer = zeitgeber
     }
 
+    /// Nimmt das Fenster entgegen, in dem die Statusansicht wirklich steckt.
+    ///
+    /// Das ist der einzige Weg, der nichts raet. Die Ansicht weiss, in welchem
+    /// Fenster sie haengt, und sagt es hier. Alles davor hat versucht, dieses
+    /// Fenster von aussen wiederzuerkennen, an der Breite, an der Stilmaske, am
+    /// Klassennamen, und jedes dieser Merkmale war falsch geraten.
+    ///
+    /// Der vorherige Anlauf hatte diese Auskunft schon und hat sie nur nicht
+    /// genutzt: Er haengte seine Beobachter an die Ansicht, und die bekam nach
+    /// dem ersten Einhaengen nichts mehr mit. Gemeldet wird das Fenster,
+    /// nachgefuehrt wird es vom Zeitgeber.
+    func adopt(_ window: NSWindow) {
+        guard adopted !== window else { return }
+        adopted = window
+        let f = window.frame
+        log.write(
+            "Fenster gemeldet: \(type(of: window)) "
+                + "[\(window.identifier?.rawValue ?? "-")] maske=\(window.styleMask.rawValue) "
+                + "\(Int(f.width))×\(Int(f.height)) oben=\(Int(f.maxY))"
+        )
+    }
+
     private func sweep() {
-        for window in NSApp.windows {
-            let id = ObjectIdentifier(window)
-            guard !pending.contains(id) else { continue }
-            guard window.isVisible else {
-                // Zu heisst zu: Beim naechsten Oeffnen wird neu gemessen, und
-                // das ist wichtig, wenn das Fenster dann auf einem anderen
-                // Bildschirm aufgeht.
-                tops.removeValue(forKey: id)
-                continue
-            }
-            guard isCandidate(window) else { continue }
-            if tops[id] == nil {
-                remember(window)
-            } else {
-                realign(window)
-            }
+        report()
+        // Das gemeldete Fenster zuerst, und danach kein zweites Mal. Der Rest
+        // der Liste ist das Netz fuer den Fall, dass die Meldung ausbleibt.
+        var gesehen: Set<ObjectIdentifier> = []
+        if let window = adopted {
+            gesehen.insert(ObjectIdentifier(window))
+            pruefe(window)
+        }
+        for window in NSApp.windows where !gesehen.contains(ObjectIdentifier(window)) {
+            pruefe(window)
+        }
+    }
+
+    private func pruefe(_ window: NSWindow) {
+        let id = ObjectIdentifier(window)
+        guard !pending.contains(id) else { return }
+        guard window.isVisible else {
+            // Zu heisst zu: Beim naechsten Oeffnen wird neu gemessen, und das
+            // ist wichtig, wenn das Fenster dann auf einem anderen Bildschirm
+            // aufgeht.
+            tops.removeValue(forKey: id)
+            return
+        }
+        guard isCandidate(window) else { return }
+        if tops[id] == nil {
+            remember(window)
+        } else {
+            realign(window)
         }
     }
 
     /// Kommt dieses Fenster ueberhaupt in Frage?
     ///
-    /// Bewusst ohne feste Breite. Ausgeschlossen wird, was sich sicher
-    /// ausschliessen laesst: alles mit Titelbalken, also die Einstellungen und
-    /// die Statusansicht als eigenes Fenster, dazu das Feld in der Leiste
-    /// selbst und die Menues. Was dann noch uebrig ist und eine Groesse hat,
-    /// bei der ein Verrutschen ueberhaupt auffiele, geht in die naechste
-    /// Pruefung: Haengt es an der Menueleiste?
+    /// Nur Groesse und Herkunft, keine Stilmaske und kein Klassenname. Beides
+    /// war geraten und beides hat den Anker blind gemacht. Was zu klein ist,
+    /// um beim Verrutschen aufzufallen, faellt heraus; dazu gehoert das Feld in
+    /// der Menueleiste selbst mit seinen 32 auf 30 Punkt. Die eigentliche
+    /// Pruefung ist die naechste: Haengt die Oberkante an der Menueleiste?
     private func isCandidate(_ window: NSWindow) -> Bool {
-        guard !window.styleMask.contains(.titled) else { return false }
-        let klasse = String(describing: type(of: window))
-        guard !klasse.contains("StatusBar"), !klasse.contains("Menu") else { return false }
+        if window === adopted { return true }
+        if let kennung = window.identifier?.rawValue,
+            Self.ownSceneIdentifiers.contains(kennung)
+        {
+            return false
+        }
         return window.frame.width >= 200 && window.frame.height >= 60
     }
 
@@ -148,11 +190,8 @@ final class MenuBarWindowKeeper {
         guard isCandidate(window), !pending.contains(id) else { return }
         guard let screen = window.screen ?? NSScreen.main else { return }
         let top = window.frame.maxY
-        guard MenuBarGeometry.hangsAtMenuBar(top: top, visibleFrame: screen.visibleFrame) else {
-            introduce(window, angenommen: false)
-            return
-        }
-        introduce(window, angenommen: true)
+        guard MenuBarGeometry.hangsAtMenuBar(top: top, visibleFrame: screen.visibleFrame)
+        else { return }
         tops[id] = top
     }
 
@@ -160,17 +199,13 @@ final class MenuBarWindowKeeper {
         guard isCandidate(window), let screen = window.screen ?? NSScreen.main else { return }
         let id = ObjectIdentifier(window)
         // Ohne gemerkte Oberkante nur dann, wenn das Fenster gerade noch an der
-        // Menueleiste haengt. Sonst waere jedes rahmenlose Fenster dieser App
-        // ein Kandidat, und der Anker zoege es unter die Leiste.
+        // Menueleiste haengt. Sonst waere jedes Fenster dieser App ein
+        // Kandidat, und der Anker zoege es unter die Leiste.
         if tops[id] == nil {
             guard
                 MenuBarGeometry.hangsAtMenuBar(
                     top: window.frame.maxY, visibleFrame: screen.visibleFrame)
-            else {
-                introduce(window, angenommen: false)
-                return
-            }
-            introduce(window, angenommen: true)
+            else { return }
             tops[id] = window.frame.maxY
         }
 
@@ -210,18 +245,83 @@ final class MenuBarWindowKeeper {
         }
     }
 
-    /// Eine Zeile je Fenster, damit im Fehlerfall dasteht, was der Anker
-    /// gesehen und wie er sich entschieden hat.
+    /// Schreibt die Fensterlage mit, sobald sie sich aendert.
     ///
-    /// Das fehlte beim vierten Anlauf, und deshalb war aus dem Protokoll nur
-    /// abzulesen, dass nichts passierte, nicht warum.
-    private func introduce(_ window: NSWindow, angenommen: Bool) {
-        let id = ObjectIdentifier(window)
-        guard introduced.insert(id).inserted else { return }
-        let f = window.frame
-        log.write(
-            "Fenster gesehen: \(type(of: window)) \(Int(f.width))×\(Int(f.height)) "
-                + "Oberkante \(Int(f.maxY)), \(angenommen ? "angenommen" : "nicht an der Menüleiste")"
-        )
+    /// Das ist die Zeile, die vier Anlaeufe lang gefehlt hat. Ohne sie stand im
+    /// Protokoll nur, dass nichts passierte, und nicht, was der Anker gesehen
+    /// und warum er es liegengelassen hat. Berichtet wird nur bei Aenderung,
+    /// sonst schriebe der Zeitgeber fuenfmal in der Sekunde dasselbe.
+    private func report() {
+        var zeilen: [String] = []
+        for window in NSApp.windows {
+            let f = window.frame
+            let kennung = window.identifier?.rawValue ?? "-"
+            let haengt =
+                (window.screen ?? NSScreen.main).map {
+                    MenuBarGeometry.hangsAtMenuBar(top: f.maxY, visibleFrame: $0.visibleFrame)
+                } ?? false
+            let urteil: String
+            if !window.isVisible {
+                urteil = "zu"
+            } else if !isCandidate(window) {
+                urteil = "kein Kandidat"
+            } else if !haengt && tops[ObjectIdentifier(window)] == nil {
+                urteil = "nicht an der Menüleiste"
+            } else {
+                urteil = "angenommen"
+            }
+            zeilen.append(
+                "\(type(of: window)) [\(kennung)] maske=\(window.styleMask.rawValue) "
+                    + "lvl=\(window.level.rawValue) \(Int(f.width))×\(Int(f.height)) "
+                    + "oben=\(Int(f.maxY)) → \(urteil)"
+            )
+        }
+        let bericht = zeilen.joined(separator: " | ")
+        guard bericht != lastReport else { return }
+        lastReport = bericht
+        log.write("Fenster: \(zeilen.isEmpty ? "keine" : bericht)")
+    }
+}
+
+
+/// Sagt dem Anker, in welchem Fenster die Statusansicht steckt.
+///
+/// Nullgross und ohne eigene Darstellung. Die Ansicht hat diese Auskunft
+/// umsonst, und sie ist die einzige, die nicht geraten ist: `self.window` ist
+/// das Fenster, in dem sie haengt, ohne Umweg ueber Breite, Stilmaske oder
+/// Klassennamen.
+///
+/// Nur melden, nicht nachfuehren. Genau daran ist ein frueherer Anlauf
+/// gescheitert: Er hat hier auch beobachtet, und diese Ansicht bekam nach dem
+/// ersten Einhaengen keine Groessenaenderung mehr mit.
+struct MenuBarWindowReporter: NSViewRepresentable {
+    let keeper: MenuBarWindowKeeper
+
+    func makeNSView(context: Context) -> NSView { ReporterView(keeper: keeper) }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? ReporterView)?.melden()
+    }
+
+    final class ReporterView: NSView {
+        private let keeper: MenuBarWindowKeeper
+
+        init(keeper: MenuBarWindowKeeper) {
+            self.keeper = keeper
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("nicht aus einer Datei") }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            melden()
+        }
+
+        func melden() {
+            guard let window else { return }
+            MainActor.assumeIsolated { keeper.adopt(window) }
+        }
     }
 }

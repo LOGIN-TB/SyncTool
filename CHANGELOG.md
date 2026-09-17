@@ -99,12 +99,21 @@
   Sicht eines FTP-Clients.
 
 
+- **Die App startet nicht mehr hinter einem Schlüsselbund-Dialog fest.** Das
+  Passwort wurde beim Start direkt gelesen, und zwar auf dem Hauptthread.
+  Solange der Schlüsselbund nachfragt, ob dieses Programm an den Eintrag darf,
+  stand damit die ganze App: kein Symbol in der Leiste, keine Protokollzeile,
+  kein Fenster. Von außen sieht das aus wie ein Absturz, und nach jedem
+  Neubauen fragt macOS erneut. Gelesen wird jetzt im Hintergrund, und wer das
+  Passwort braucht, wartet darauf.
 - **Das Fenster bleibt unter seinem Symbol**, auch wenn Abschnitte auf- und
   zugeklappt werden. Vorher wanderte die Oberkante mit jeder Höhenänderung.
-  SyncTool erkennt sein Fenster jetzt daran, dass es an der Menüleiste hängt,
-  und nicht mehr an seiner Breite, und es schaut regelmäßig selbst nach, statt
-  sich darauf zu verlassen, dass AppKit jede Größenänderung meldet. Ist die
-  Oberkante doch einmal verrutscht, zieht es sie beim nächsten Blick zurück.
+  Die Ansicht sagt dem Anker jetzt selbst, in welchem Fenster sie steckt,
+  statt dass er es an Breite, Stilmaske oder Klassennamen wiederzuerkennen
+  versucht; alle drei waren geraten und alle drei falsch. Er schaut außerdem
+  regelmäßig selbst nach, statt sich darauf zu verlassen, dass AppKit jede
+  Größenänderung meldet. Ist die Oberkante doch einmal verrutscht, zieht er sie
+  beim nächsten Blick zurück.
 - **Der Unterschied zwischen den beiden Bestandszahlen ist belegt statt
   behauptet.** Vorher verglich die App zwei Zahlen: Zieh die Repos ab, dann
   muss dieselbe Zahl übrigbleiben. Das ist keine Aussage, sondern eine Wette.

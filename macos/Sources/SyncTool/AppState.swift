@@ -88,6 +88,8 @@ final class AppState: ObservableObject {
 
     private let profileStore = ProfileStore()
     private let keychain = KeychainStore()
+    /// Der laufende Schluesselbund-Zugriff. Siehe `loadPassword`.
+    private var passwordLoad: Task<Void, Never>?
     private let stateStore = SyncStateStore()
     /// Das Protokoll auf Platte. Siehe `RunLog`.
     private let runLog = RunLog()
@@ -303,14 +305,49 @@ final class AppState: ObservableObject {
 
     // MARK: - Passwort
 
+    /// Holt das Passwort aus dem Schluesselbund, ohne die App anzuhalten.
+    ///
+    /// Frueher stand hier ein schlichter Aufruf, und der lief auf dem
+    /// Hauptthread. Das ging gut, solange der Schluesselbund sofort antwortete.
+    /// Nach jedem neuen Bau fragt macOS aber nach, ob dieses Programm an den
+    /// Eintrag darf, und bis jemand den Dialog beantwortet, steht
+    /// `SecItemCopyMatching` still. Weil der Aufruf aus `init` kam, stand damit
+    /// die ganze App: kein Symbol in der Leiste, keine Protokollzeile, kein
+    /// Fenster. Von aussen sieht das aus wie ein Absturz.
+    ///
+    /// Nachgemessen an einem haengenden Prozess: Der Hauptthread stand in
+    /// `AppState.init` → `loadPassword` → `SecItemCopyMatching` und wartete auf
+    /// `securityd`, waehrend der SecurityAgent im Hintergrund seinen Dialog
+    /// offen hatte.
+    ///
+    /// Wer das Passwort braucht, wartet ueber `awaitPassword` darauf. Alle
+    /// anderen laufen weiter.
     func loadPassword() {
+        passwordLoad?.cancel()
         guard let profile = selectedProfile, !profile.host.isEmpty, !profile.user.isEmpty else {
+            passwordLoad = nil
             password = ""
             return
         }
-        password =
-            (try? keychain.load(host: profile.host, port: profile.port, account: profile.user))
-            ?? ""
+        let keychain = self.keychain
+        let host = profile.host
+        let port = profile.port
+        let account = profile.user
+        passwordLoad = Task { [weak self] in
+            let wert = await Task.detached(priority: .userInitiated) {
+                (try? keychain.load(host: host, port: port, account: account)) ?? ""
+            }.value
+            guard !Task.isCancelled else { return }
+            self?.password = wert
+        }
+    }
+
+    /// Wartet, bis der Schluesselbund geantwortet hat.
+    ///
+    /// Vor jedem Lauf, der das Passwort braucht. Ohne das liefe der erste Lauf
+    /// nach dem Start mit einem leeren Passwort los.
+    func awaitPassword() async {
+        await passwordLoad?.value
     }
 
     /// Sichert oder loescht das Passwort eines bestimmten Profils.
@@ -604,6 +641,8 @@ final class AppState: ObservableObject {
         lastBackup = nil
         clearLog()
         runner.resetCancellation()
+        // Der Schluesselbund kann beim ersten Mal nachfragen. Siehe `loadPassword`.
+        await awaitPassword()
 
         do {
             let result = try await engine.check(
@@ -643,6 +682,7 @@ final class AppState: ObservableObject {
         lastBackup = nil
         progress = TransferProgress(completed: 0, total: expected, currentPath: "")
         runner.resetCancellation()
+        await awaitPassword()
 
         do {
             let outcome = try await engine.transfer(

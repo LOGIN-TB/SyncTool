@@ -15,6 +15,10 @@ struct StatusView: View {
     @ObservedObject var state: AppState
     @Environment(\.openWindow) private var openWindow
 
+    /// Sagt dem Anker, in welchem Fenster diese Ansicht steckt. Nur die
+    /// Menueleiste setzt das; das eigene Statusfenster soll nirgends andocken.
+    var windowKeeper: MenuBarWindowKeeper?
+
     @State private var showLog = false
     @State private var deleteOnTransfer = false
     @State private var pendingDeletion: PendingDeletion?
@@ -71,6 +75,11 @@ struct StatusView: View {
         // `.background(.thickMaterial)` ersetzen und die weichere Schrift
         // in Kauf nehmen.
         .background(Color(nsColor: .windowBackgroundColor))
+        .background {
+            if let windowKeeper {
+                MenuBarWindowReporter(keeper: windowKeeper)
+            }
+        }
         .onChange(of: state.selectedProfileID) { _, _ in
             // Beide haengen am Profil: ein fuer A gesetzter Haken darf nach dem
             // Umschalten auf B nicht stehen bleiben, B erlaubt womoeglich gar
