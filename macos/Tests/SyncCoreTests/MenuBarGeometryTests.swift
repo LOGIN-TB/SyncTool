@@ -66,6 +66,43 @@ struct MenuBarGeometryTests {
         #expect(MenuBarGeometry.anchorTop(measured: 1409, visibleFrame: sichtbar) == 1409)
     }
 
+    /// Der Fall, der den vierten Anlauf hätte retten können.
+    ///
+    /// Merkt sich der Anker einmal eine Kante, die schon verrutscht ist, dann
+    /// zieht er das Fenster bei jeder weiteren Änderung genau dorthin zurück
+    /// und schreibt den Fehler fest. Eine Kante weit weg von der Menüleiste ist
+    /// deshalb keine Kante, sondern ein Messfehler.
+    @Test("Eine verrutschte Oberkante wird verworfen")
+    func aDriftedTopEdgeIsDiscarded() {
+        let verrutscht = sichtbar.maxY - 500
+        let oben = MenuBarGeometry.anchorTop(measured: verrutscht, visibleFrame: sichtbar)
+        #expect(oben == sichtbar.maxY - MenuBarGeometry.assumedGap)
+    }
+
+    /// Woran der Anker das Menüleisten-Fenster überhaupt erkennt.
+    ///
+    /// Vorher hing das an `Breite == 460`, also an einer Zahl aus der Ansicht.
+    /// Sie stimmte nicht, und im Protokoll stand danach gar nichts mehr.
+    @Test(
+        "An der Menüleiste hängt, was dicht darunter sitzt",
+        arguments: [
+            (0.0, true), (2.0, true), (40.0, true), (40.5, false), (300.0, false),
+        ] as [(CGFloat, Bool)]
+    )
+    func whatCountsAsHangingAtTheMenuBar(abstand: CGFloat, erwartet: Bool) {
+        #expect(
+            MenuBarGeometry.hangsAtMenuBar(
+                top: sichtbar.maxY - abstand, visibleFrame: sichtbar
+            ) == erwartet
+        )
+    }
+
+    /// Ein Fenster, das über die Menüleiste hinausragt, hängt nicht daran.
+    @Test("Über der Menüleiste zählt nicht")
+    func aboveTheMenuBarDoesNotCount() {
+        #expect(!MenuBarGeometry.hangsAtMenuBar(top: sichtbar.maxY + 50, visibleFrame: sichtbar))
+    }
+
     /// Ohne Schwelle setzt jede Rundung einen neuen Frame, der wieder eine
     /// Benachrichtigung ausloest, die wieder einen Frame setzt.
     @Test("Bruchteile eines Punktes lösen keine Verschiebung aus")

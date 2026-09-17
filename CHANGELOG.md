@@ -101,6 +101,10 @@
 
 - **Das Fenster bleibt unter seinem Symbol**, auch wenn Abschnitte auf- und
   zugeklappt werden. Vorher wanderte die Oberkante mit jeder Höhenänderung.
+  SyncTool erkennt sein Fenster jetzt daran, dass es an der Menüleiste hängt,
+  und nicht mehr an seiner Breite, und es schaut regelmäßig selbst nach, statt
+  sich darauf zu verlassen, dass AppKit jede Größenänderung meldet. Ist die
+  Oberkante doch einmal verrutscht, zieht es sie beim nächsten Blick zurück.
 - **Der Unterschied zwischen den beiden Bestandszahlen ist belegt statt
   behauptet.** Vorher verglich die App zwei Zahlen: Zieh die Repos ab, dann
   muss dieselbe Zahl übrigbleiben. Das ist keine Aussage, sondern eine Wette.

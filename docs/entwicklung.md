@@ -71,10 +71,17 @@ Prueft, ob das Menueleisten-Fenster beim Auf- und Zuklappen oben haengen
 bleibt. Braucht einen Bildschirm und laeuft deshalb nicht in der CI.
 
 Die reine Rechnung dahinter steht in `MenuBarGeometryTests`. Hier geht es um
-die Mechanik drumherum, und daran sind drei Anlaeufe gescheitert: ein Abstand,
+die Mechanik drumherum, und daran sind vier Anlaeufe gescheitert: ein Abstand,
 der gemessen wurde, bevor SwiftUI positioniert hatte; ein Anker, der auf
-Benachrichtigungen wartete, die ausbleiben koennen; und einer, der an einer
-nullgrossen Hintergrundansicht hing und nach dem ersten Mal nichts mehr mitbekam.
+Benachrichtigungen wartete, die ausbleiben koennen; einer, der an einer
+nullgrossen Hintergrundansicht hing und nach dem ersten Mal nichts mehr
+mitbekam; und einer, der prozessweit zuhoerte, das Fenster aber an `Breite ==
+460` erkannte und es deshalb nie fand.
+
+Daher pruefen die Faelle hier bewusst auch das, was nicht passieren darf: Das
+Fenster ist absichtlich 472 breit statt 460, ein zweites steht in der
+Bildschirmmitte und muss unberuehrt bleiben, und ein Schubs ohne
+Groessenaenderung muss allein vom regelmaessigen Blick zurueckgeholt werden.
 Wer hier etwas aendert, laesst das Ziel einmal laufen.
 
 ```bash
