@@ -19,14 +19,14 @@ struct StatusView: View {
     /// Menueleiste setzt das; das eigene Statusfenster soll nirgends andocken.
     var windowKeeper: MenuBarWindowKeeper?
 
-    /// Feste Hoehe fuer das Popover der Menueleiste, `nil` fuer das eigene
-    /// Fenster.
+    /// Ab hier scrollt der Mittelteil, statt das Fenster weiter wachsen zu
+    /// lassen. `nil` heisst: unbegrenzt, das Fenster waechst mit.
     ///
-    /// Das ist die Loesung fuer ein Fenster, das sich nicht nachfuehren laesst:
-    /// Was die Hoehe nie aendert, verrutscht auch nicht. Siehe
-    /// `MenuBarGeometry.popoverHeight`.
-    var fixedHeight: CGFloat?
+    /// Siehe `MenuBarGeometry.maxContentHeight`.
+    var maxContentHeight: CGFloat?
 
+    /// Die natuerliche Hoehe des Mittelteils. Siehe `scrollingContent`.
+    @State private var contentHeight: CGFloat = 0
     @State private var showLog = false
     @State private var deleteOnTransfer = false
     @State private var pendingDeletion: PendingDeletion?
@@ -41,20 +41,19 @@ struct StatusView: View {
     /// darunter durch: eine eingerueckte Trennlinie franst den rechten Rand aus.
     private let inset: CGFloat = 16
 
-    /// Innen ohne jeden Hoehenzwang, aussen mit.
+    /// Bewusst ohne jeden Hoehenzwang, mit genau einer Ausnahme.
     ///
     /// `MenuBarExtra` im Fenster-Stil richtet die Fensterhoehe nach der
     /// Wunschgroesse dieser Ansicht. Jede feste oder auch nur mindestgesetzte
-    /// Hoehe *im Inneren* macht diese Wunschgroesse mehrdeutig; das Fenster
+    /// Hoehe im Inneren macht diese Wunschgroesse mehrdeutig; das Fenster
     /// bleibt dann zu klein, der Stapel staucht seine Kinder, und Kopfzeile,
-    /// Inhalt und Fusszeile zeichnen uebereinander. Das gilt unveraendert.
+    /// Inhalt und Fusszeile zeichnen uebereinander.
     ///
-    /// Die Hoehe ganz aussen ist etwas anderes, und sie ist der Grund, warum
-    /// das Popover nicht mehr wandert: Wenn diese Ansicht immer gleich hoch
-    /// ist, aendert das Fenster seine Groesse nie, und dann kann auch seine
-    /// Oberkante nicht verrutschen. Der Mittelteil bekommt dafuer einen
-    /// Bildlauf. `BoundedList` bleibt trotzdem, sonst fuellt eine einzige lange
-    /// Liste die ganze Flaeche.
+    /// Die Ausnahme ist eine Obergrenze fuer den Mittelteil, und sie ist der
+    /// Grund, warum das Fenster nicht mehr wandert. Es waechst nach unten, wenn
+    /// ein Abschnitt aufgeht, und schrumpft wieder, wenn er zugeht. Nur ueber
+    /// den Bildschirmrand hinaus waechst es nicht mehr, denn ab dort rueckt
+    /// macOS es nach oben weg und beim Zuklappen nicht zurueck.
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -75,9 +74,6 @@ struct StatusView: View {
                 .padding(.vertical, 10)
         }
         .frame(width: 460)
-        // `nil` laesst die Hoehe frei, und genau so soll das eigene
-        // Statusfenster sich verhalten.
-        .frame(height: fixedHeight)
         // Undurchsichtiger Grund, und zwar aus einem sachlichen Grund: Ueber
         // einer durchscheinenden Unterlage schaltet AppKit die Schriftglaettung
         // ab, Text wird duenn und ausgefranst. Das faellt bei einem Fenster
@@ -102,11 +98,13 @@ struct StatusView: View {
         }
     }
 
-    /// Der Mittelteil, bei fester Fensterhoehe mit Bildlauf.
+    /// Der Mittelteil. Waechst mit dem Inhalt und scrollt erst, wenn es sonst
+    /// nicht mehr auf den Bildschirm passt.
     ///
-    /// Ohne feste Hoehe bleibt alles wie vorher: Die Ansicht waechst mit ihrem
-    /// Inhalt, das eigene Statusfenster waechst mit, und die Bildschirmfotos
-    /// zeigen den ganzen Inhalt ohne Rollbalken.
+    /// Gemessen statt geschaetzt: Die Ansicht meldet ihre natuerliche Hoehe
+    /// nach oben, und erst wenn die ueber der Grenze liegt, kommt eine
+    /// Scrollflaeche darum. Solange sie darunter bleibt, gibt es keine, und
+    /// damit auch keinen Rollbalken, der ohne Not dasteht.
     @ViewBuilder
     private var scrollingContent: some View {
         let inner =
@@ -114,17 +112,24 @@ struct StatusView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, inset)
             .padding(.vertical, 12)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
+                }
+            )
+            .onPreferenceChange(ContentHeightKey.self) { hoehe in
+                contentHeight = hoehe
+            }
 
-        if fixedHeight == nil {
-            inner
-        } else {
+        if let grenze = maxContentHeight, contentHeight > grenze {
             ScrollView {
                 inner
             }
-            // Nimmt sich den Platz zwischen Kopf und Fuss, nicht mehr.
-            .frame(maxHeight: .infinity)
+            .frame(height: grenze)
             // Kurze Inhalte sollen nicht federn: Das sieht nach Fehler aus.
             .scrollBounceBehavior(.basedOnSize)
+        } else {
+            inner
         }
     }
 
@@ -607,7 +612,6 @@ struct StatusView: View {
 
             // Ohne eigene Scrollflaeche: die aeussere scrollt schon, und zwei
             // ineinanderliegende Scrollflaechen sind auf macOS eine Zumutung.
-            BoundedList(count: pending.items.count, rowHeight: 15) {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(pending.items.prefix(200)) { item in
                     Text(item.path)
@@ -621,7 +625,6 @@ struct StatusView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-            }
             }
             .padding(6)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -750,7 +753,6 @@ private struct InventoryBalance: View {
     private var settledNote: some View {
         DisclosureGroup(isExpanded: $settledExpanded) {
             VStack(alignment: .leading, spacing: 4) {
-                BoundedList(count: report.settledContributors.count, rowHeight: 16) {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(report.settledContributors) { repo in
                             HStack(spacing: 6) {
@@ -770,7 +772,6 @@ private struct InventoryBalance: View {
                             }
                         }
                     }
-                }
                 Text(
                     "Dieselben Commits, anders gepackt: git benennt seine Packdateien nach "
                         + "ihrem Inhalt und packt von sich aus um. Ein Repo auf gleichem "
@@ -817,7 +818,6 @@ private struct InventoryBalance: View {
     private var rest: some View {
         DisclosureGroup(isExpanded: $restExpanded) {
             VStack(alignment: .leading, spacing: 4) {
-                BoundedList(count: report.unexplained.count, rowHeight: 14) {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(report.unexplained.prefix(200)) { eintrag in
                             HStack(spacing: 6) {
@@ -839,7 +839,6 @@ private struct InventoryBalance: View {
                             .foregroundStyle(.secondary)
                         }
                     }
-                }
                 Text(
                     "Diese Einträge liegen auf genau einer Seite und in keinem Repo auf "
                         + "gleichem Stand. Sie sind der Grund, warum die beiden Zahlen "
@@ -886,7 +885,6 @@ private struct InventoryBalance: View {
 
     private var excluded: some View {
         DisclosureGroup(isExpanded: $excludedExpanded) {
-            BoundedList(count: report.excluded.count, rowHeight: 14) {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(report.excluded.prefix(100)) { branch in
                     HStack(spacing: 6) {
@@ -916,7 +914,6 @@ private struct InventoryBalance: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 2)
             }
-            }
             .padding(.leading, 18)
             .padding(.top, 4)
         } label: {
@@ -943,7 +940,6 @@ private struct DriftSection: View {
             EmptyView()
         } else {
             DisclosureGroup(isExpanded: $expanded) {
-                BoundedList(count: items.count, rowHeight: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(items.prefix(200)) { item in
                         HStack(spacing: 6) {
@@ -962,7 +958,6 @@ private struct DriftSection: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
-                }
                 }
                 .padding(.leading, 18)
                 .padding(.top, 4)
@@ -1000,7 +995,6 @@ private struct ConflictSection: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-                BoundedList(count: conflicts.count, rowHeight: 32) {
                 VStack(alignment: .leading, spacing: 6) {
                 ForEach(conflicts.prefix(100)) { conflict in
                     VStack(alignment: .leading, spacing: 1) {
@@ -1016,7 +1010,6 @@ private struct ConflictSection: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     }
-                }
                 }
                 }
             }
@@ -1081,7 +1074,6 @@ private struct GitSection: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                    BoundedList(count: rows.count, rowHeight: 32) {
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(rows) { row in
                                 VStack(alignment: .leading, spacing: 1) {
@@ -1096,7 +1088,6 @@ private struct GitSection: View {
                                 }
                             }
                         }
-                    }
                 }
                 .padding(.leading, 18)
                 .padding(.top, 4)
@@ -1213,5 +1204,14 @@ struct Banner: View {
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(kind.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+
+/// Die gemessene Hoehe des Mittelteils, von unten nach oben gereicht.
+private struct ContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }

@@ -103,23 +103,35 @@ struct MenuBarGeometryTests {
         #expect(!MenuBarGeometry.hangsAtMenuBar(top: sichtbar.maxY + 50, visibleFrame: sichtbar))
     }
 
-    /// Die Hoehe, mit der das Popover aufgeht.
+    /// Die Obergrenze fuer den Mittelteil.
     ///
-    /// Sie ist fest, und das ist der Zweck: Ein Fenster, das seine Hoehe nie
-    /// aendert, kann auch nicht verrutschen. Auf einem kleinen Bildschirm faellt
-    /// sie kleiner aus, aber nie so klein, dass nur noch Kopf und Fuss passen.
+    /// Das ist der eigentliche Fehler gewesen: Vier aufgeklappte Abschnitte
+    /// zusammen reichten weiter, als Platz war, und ab dort rueckt macOS das
+    /// Fenster nach oben weg. Beim Zuklappen rueckt es nicht zurueck. Bleibt
+    /// das Fenster unter der Bildschirmhoehe, stellt sich die Frage nie.
     @Test(
-        "Die Popoverhöhe passt auf den Bildschirm",
+        "Der Mittelteil bleibt im Bildschirm",
         arguments: [
-            (1415.0, 620.0),  // grosser Bildschirm: die Wunschhöhe
-            (660.0, 620.0),  // gerade noch
-            (500.0, 460.0),  // kleiner Bildschirm: 40 Punkt Luft bleiben
-            (300.0, 360.0),  // sehr klein: die Untergrenze gewinnt
+            (1415.0, 1195.0),  // grosser Bildschirm
+            (900.0, 680.0),  // Notebook
+            (400.0, 240.0),  // sehr klein: die Untergrenze gewinnt
         ] as [(CGFloat, CGFloat)]
     )
-    func thePopoverHeightFitsTheScreen(hoehe: CGFloat, erwartet: CGFloat) {
+    func theContentStaysOnScreen(hoehe: CGFloat, erwartet: CGFloat) {
         let schirm = CGRect(x: 0, y: 0, width: 2560, height: hoehe)
-        #expect(MenuBarGeometry.popoverHeight(visibleFrame: schirm) == erwartet)
+        #expect(MenuBarGeometry.maxContentHeight(visibleFrame: schirm) == erwartet)
+    }
+
+    /// Die Zusage, auf die es ankommt: Fenster plus Rahmenwerk passen auf den
+    /// Bildschirm, sonst waere nichts gewonnen.
+    @Test("Inhalt plus Rahmenwerk passen auf den Bildschirm")
+    func contentPlusChromeFitsTheScreen() {
+        let hoehen: [CGFloat] = [1415, 1080, 900, 700]
+        for hoehe in hoehen {
+            let schirm = CGRect(x: 0, y: 0, width: 2560, height: hoehe)
+            let inhalt = MenuBarGeometry.maxContentHeight(visibleFrame: schirm)
+            #expect(inhalt + MenuBarGeometry.chromeHeight <= hoehe)
+        }
     }
 
     /// Ohne Schwelle setzt jede Rundung einen neuen Frame, der wieder eine

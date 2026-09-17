@@ -107,13 +107,16 @@
   Neubauen fragt macOS erneut. Gelesen wird jetzt im Hintergrund, und wer das
   Passwort braucht, wartet darauf.
 - **Das Fenster bleibt unter seinem Symbol**, auch wenn Abschnitte auf- und
-  zugeklappt werden. Es hat jetzt eine feste Höhe, und der Mittelteil bekommt
-  einen Bildlauf. Was seine Höhe nie ändert, kann auch nicht verrutschen.
-  Fünf Anläufe haben vorher versucht, die Höhenänderung nachträglich
-  auszugleichen, und keiner kam an das Fenster heran: Unter macOS 26 gehört das
-  Popover einer `MenuBarExtra` nicht mehr zum eigenen Prozess. Es steht in
-  keiner Fensterliste, meldet keine Größenänderung, und auch die Ansicht darin
-  findet es nicht. Das Protokoll belegt es.
+  zugeklappt werden. Es wächst nach unten und schrumpft wieder, nur über den
+  Bildschirmrand hinaus wächst es nicht mehr: Ab dort rückt macOS es nach oben
+  weg, und beim Zuklappen rückt es nicht zurück. Genau das war der Fehler.
+  Nachträglich zurechtrücken lässt es sich nicht, denn unter macOS 26 gehört
+  das Popover einer `MenuBarExtra` nicht mehr zum eigenen Prozess; es steht in
+  keiner Fensterliste und meldet keine Größenänderung.
+- **Ein Rollbalken statt zwei.** Die langen Listen hatten jede ihre eigene
+  Scrollfläche. Sobald der ganze Mittelteil scrollte, lagen zwei Rollbalken
+  übereinander. Jetzt scrollt nur noch der Mittelteil, und auch der erst, wenn
+  es sonst nicht mehr auf den Bildschirm passt.
 - **Der Unterschied zwischen den beiden Bestandszahlen ist belegt statt
   behauptet.** Vorher verglich die App zwei Zahlen: Zieh die Repos ab, dann
   muss dieselbe Zahl übrigbleiben. Das ist keine Aussage, sondern eine Wette.

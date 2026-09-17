@@ -10,6 +10,12 @@ import SwiftUI
 /// einer festen Anzahl: Konfliktzeilen sind doppelt so hoch wie Pfadzeilen, und
 /// eine Liste, die knapp ueber die Schwelle rutscht, braucht den Rollbalken
 /// nicht.
+///
+/// Nur noch im Einstellungsfenster. Die Statusansicht hat das aufgegeben: Dort
+/// scrollt der ganze Mittelteil, und eine Scrollflaeche in einer Scrollflaeche
+/// ergibt zwei Rollbalken uebereinander. Das ist auf macOS eine Zumutung, und
+/// zu Recht beanstandet worden. Hier passt es, weil das Einstellungsfenster
+/// selbst nicht scrollt.
 struct BoundedList<Content: View>: View {
     let count: Int
     /// Ungefaehre Hoehe einer Zeile in Punkten.

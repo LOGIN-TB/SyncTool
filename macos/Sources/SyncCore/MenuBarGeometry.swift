@@ -72,26 +72,27 @@ public enum MenuBarGeometry {
         )
     }
 
-    /// Wunschhoehe des Popovers.
+    /// Was Kopfzeile, Fusszeile und Raender vom Fenster belegen.
     ///
-    /// Grosszuegig gewaehlt: Der Statusteil mit eingeklappten Abschnitten
-    /// braucht schon rund 560 Punkt, und darunter saehe das Fenster staendig
-    /// abgeschnitten aus.
-    public static let preferredPopoverHeight: CGFloat = 620
+    /// Grosszuegig gerundet und mit Sicherheitsabstand: Der Wert entscheidet
+    /// nur darueber, ab wann der Mittelteil scrollt, und ein paar Punkte zu
+    /// viel sind harmlos. Ein paar zu wenig waeren es nicht, denn dann waechst
+    /// das Fenster doch wieder ueber den Bildschirm hinaus.
+    public static let chromeHeight: CGFloat = 220
 
-    /// Die feste Hoehe, mit der das Popover auf diesem Bildschirm aufgeht.
+    /// Die groesste Hoehe, die der Mittelteil einnehmen darf.
     ///
-    /// Sie ist fest, und das ist der Zweck. Ein Fenster, das seine Hoehe nie
-    /// aendert, kann auch nicht verrutschen. Fuenf Anlaeufe haben versucht, die
-    /// Hoehenaenderung nachtraeglich auszugleichen, und keiner kam an das
-    /// Fenster heran: Unter macOS 26 haelt SyncTools eigener Prozess es gar
-    /// nicht, es steht in keiner Fensterliste und meldet nichts. Was bleibt,
-    /// ist die eigene Seite der Sache, naemlich die Hoehe des Inhalts.
+    /// Das ist die eigentliche Erkenntnis aus der ganzen Geschichte. Das
+    /// Fenster ist nie gewandert, weil eine Nachfuehrung fehlte, sondern weil
+    /// es ueber den Bildschirm hinauswuchs: Vier aufgeklappte Abschnitte
+    /// zusammen reichten weiter, als Platz war, und dann rueckt macOS das
+    /// Fenster nach oben. Beim Zuklappen rueckt es nicht zurueck.
     ///
-    /// Auf einem kleinen Bildschirm faellt sie kleiner aus, damit unten noch
-    /// Luft bleibt. Ein Bildlauf faengt alles ab, was darueber hinausgeht.
-    public static func popoverHeight(visibleFrame: CGRect) -> CGFloat {
-        min(preferredPopoverHeight, max(360, visibleFrame.height - 40))
+    /// Bleibt das Fenster unter der Bildschirmhoehe, stellt sich die Frage nie.
+    /// Es waechst nach unten, wenn etwas aufgeht, und schrumpft wieder, wenn es
+    /// zugeht. Genau das soll es tun.
+    public static func maxContentHeight(visibleFrame: CGRect) -> CGFloat {
+        max(240, visibleFrame.height - chromeHeight)
     }
 
     /// Lohnt die Verschiebung? Bruchteile eines Punktes nicht.
