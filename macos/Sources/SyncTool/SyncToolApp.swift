@@ -9,8 +9,14 @@ struct SyncToolApp: App {
     @Environment(\.openWindow) private var openWindow
 
     /// Einmal beim Start bestimmt. Siehe `MenuBarGeometry.maxContentHeight`.
+    ///
+    /// Bewusst der kleinste Bildschirm und nicht der Hauptbildschirm: Das
+    /// Popover geht dort auf, wo das Symbol gerade ist, und das kann der
+    /// zweite Monitor sein. Ein Wert, der nur auf dem grossen passt, laeuft auf
+    /// dem kleinen oben aus dem Bild.
     private let maxContentHeight = MenuBarGeometry.maxContentHeight(
-        visibleFrame: NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        visibleFrame: NSScreen.screens.map(\.visibleFrame).min { $0.height < $1.height }
+            ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
     )
 
     var body: some Scene {

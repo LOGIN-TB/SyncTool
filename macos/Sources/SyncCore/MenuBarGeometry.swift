@@ -74,25 +74,34 @@ public enum MenuBarGeometry {
 
     /// Was Kopfzeile, Fusszeile und Raender vom Fenster belegen.
     ///
-    /// Grosszuegig gerundet und mit Sicherheitsabstand: Der Wert entscheidet
-    /// nur darueber, ab wann der Mittelteil scrollt, und ein paar Punkte zu
-    /// viel sind harmlos. Ein paar zu wenig waeren es nicht, denn dann waechst
-    /// das Fenster doch wieder ueber den Bildschirm hinaus.
-    public static let chromeHeight: CGFloat = 220
+    /// Gemessen sind es rund 125 Punkt. Hier steht mehr, und zwar mit Absicht:
+    /// Der Wert entscheidet nur darueber, ab wann der Mittelteil scrollt, und
+    /// ein paar Punkte zu viel sind harmlos. Ein paar zu wenig waeren es nicht.
+    public static let chromeHeight: CGFloat = 200
+
+    /// Ab hier ist ein Rollbalken die freundlichere Loesung.
+    ///
+    /// 560 Punkt sind an den gemessenen Faellen ausgerichtet: Ein volles
+    /// Pruefergebnis mit zugeklappten Abschnitten braucht rund 485 und bleibt
+    /// damit ohne Rollbalken. Wer einen Abschnitt aufklappt, bekommt einen, und
+    /// das ist gewollt. Ein Fenster, das dabei auf ueber 1300 Punkt waechst,
+    /// ist keine Hilfe: Es laeuft oben aus dem Bildschirm, und dann ist der
+    /// Pfeil zum Zuklappen nicht mehr da.
+    public static let preferredContentHeight: CGFloat = 560
 
     /// Die groesste Hoehe, die der Mittelteil einnehmen darf.
     ///
     /// Das ist die eigentliche Erkenntnis aus der ganzen Geschichte. Das
     /// Fenster ist nie gewandert, weil eine Nachfuehrung fehlte, sondern weil
-    /// es ueber den Bildschirm hinauswuchs: Vier aufgeklappte Abschnitte
-    /// zusammen reichten weiter, als Platz war, und dann rueckt macOS das
-    /// Fenster nach oben. Beim Zuklappen rueckt es nicht zurueck.
+    /// es ueber den Bildschirm hinauswuchs: Aufgeklappte Abschnitte reichten
+    /// zusammen weiter, als Platz war, und dann rueckt macOS das Fenster nach
+    /// oben. Beim Zuklappen rueckt es nicht zurueck.
     ///
-    /// Bleibt das Fenster unter der Bildschirmhoehe, stellt sich die Frage nie.
-    /// Es waechst nach unten, wenn etwas aufgeht, und schrumpft wieder, wenn es
-    /// zugeht. Genau das soll es tun.
+    /// Auf einem kleinen Bildschirm faellt die Grenze kleiner aus, nie aber
+    /// unter 240: Ein Mittelteil, in dem nur noch zwei Zeilen stehen, waere
+    /// keine Ansicht mehr.
     public static func maxContentHeight(visibleFrame: CGRect) -> CGFloat {
-        max(240, visibleFrame.height - chromeHeight)
+        min(preferredContentHeight, max(240, visibleFrame.height - chromeHeight))
     }
 
     /// Lohnt die Verschiebung? Bruchteile eines Punktes nicht.

@@ -112,8 +112,9 @@ struct MenuBarGeometryTests {
     @Test(
         "Der Mittelteil bleibt im Bildschirm",
         arguments: [
-            (1415.0, 1195.0),  // grosser Bildschirm
-            (900.0, 680.0),  // Notebook
+            (1415.0, 560.0),  // grosser Bildschirm: die Wunschhöhe
+            (900.0, 560.0),  // Notebook: immer noch die Wunschhöhe
+            (700.0, 500.0),  // klein: der Bildschirm entscheidet
             (400.0, 240.0),  // sehr klein: die Untergrenze gewinnt
         ] as [(CGFloat, CGFloat)]
     )
@@ -126,7 +127,7 @@ struct MenuBarGeometryTests {
     /// Bildschirm, sonst waere nichts gewonnen.
     @Test("Inhalt plus Rahmenwerk passen auf den Bildschirm")
     func contentPlusChromeFitsTheScreen() {
-        let hoehen: [CGFloat] = [1415, 1080, 900, 700]
+        let hoehen: [CGFloat] = [1415, 1080, 900, 700, 500]
         for hoehe in hoehen {
             let schirm = CGRect(x: 0, y: 0, width: 2560, height: hoehe)
             let inhalt = MenuBarGeometry.maxContentHeight(visibleFrame: schirm)

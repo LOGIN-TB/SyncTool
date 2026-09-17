@@ -115,8 +115,9 @@
   keiner Fensterliste und meldet keine Größenänderung.
 - **Ein Rollbalken statt zwei.** Die langen Listen hatten jede ihre eigene
   Scrollfläche. Sobald der ganze Mittelteil scrollte, lagen zwei Rollbalken
-  übereinander. Jetzt scrollt nur noch der Mittelteil, und auch der erst, wenn
-  es sonst nicht mehr auf den Bildschirm passt.
+  übereinander. Jetzt scrollt nur noch der Mittelteil, und auch der erst ab
+  einer Höhe, bei der ein Rollbalken die freundlichere Lösung ist. Ein volles
+  Prüfergebnis mit zugeklappten Abschnitten bleibt ohne.
 - **Der Unterschied zwischen den beiden Bestandszahlen ist belegt statt
   behauptet.** Vorher verglich die App zwei Zahlen: Zieh die Repos ab, dann
   muss dieselbe Zahl übrigbleiben. Das ist keine Aussage, sondern eine Wette.
