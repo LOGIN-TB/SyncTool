@@ -8,9 +8,16 @@ struct SyncToolApp: App {
     @State private var windowKeeper = MenuBarWindowKeeper()
     @Environment(\.openWindow) private var openWindow
 
+    /// Einmal beim Start bestimmt und danach unveraendert. Eine Hoehe, die sich
+    /// im Betrieb aendert, waere genau das Problem, das sie loesen soll.
+    private let popoverHeight = MenuBarGeometry.popoverHeight(
+        visibleFrame: NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+    )
+
     var body: some Scene {
         MenuBarExtra {
-            StatusView(state: state, windowKeeper: windowKeeper)
+            StatusView(
+                state: state, windowKeeper: windowKeeper, fixedHeight: popoverHeight)
         } label: {
             // Der Anker fuer die Startargumente. Das Symbol der Menueleiste ist
             // das Einzige, was bei einer LSUIElement-App verlaesslich beim Start

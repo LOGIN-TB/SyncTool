@@ -72,6 +72,28 @@ public enum MenuBarGeometry {
         )
     }
 
+    /// Wunschhoehe des Popovers.
+    ///
+    /// Grosszuegig gewaehlt: Der Statusteil mit eingeklappten Abschnitten
+    /// braucht schon rund 560 Punkt, und darunter saehe das Fenster staendig
+    /// abgeschnitten aus.
+    public static let preferredPopoverHeight: CGFloat = 620
+
+    /// Die feste Hoehe, mit der das Popover auf diesem Bildschirm aufgeht.
+    ///
+    /// Sie ist fest, und das ist der Zweck. Ein Fenster, das seine Hoehe nie
+    /// aendert, kann auch nicht verrutschen. Fuenf Anlaeufe haben versucht, die
+    /// Hoehenaenderung nachtraeglich auszugleichen, und keiner kam an das
+    /// Fenster heran: Unter macOS 26 haelt SyncTools eigener Prozess es gar
+    /// nicht, es steht in keiner Fensterliste und meldet nichts. Was bleibt,
+    /// ist die eigene Seite der Sache, naemlich die Hoehe des Inhalts.
+    ///
+    /// Auf einem kleinen Bildschirm faellt sie kleiner aus, damit unten noch
+    /// Luft bleibt. Ein Bildlauf faengt alles ab, was darueber hinausgeht.
+    public static func popoverHeight(visibleFrame: CGRect) -> CGFloat {
+        min(preferredPopoverHeight, max(360, visibleFrame.height - 40))
+    }
+
     /// Lohnt die Verschiebung? Bruchteile eines Punktes nicht.
     ///
     /// Ohne diese Schwelle setzt jede Rundung einen neuen Frame, der wieder

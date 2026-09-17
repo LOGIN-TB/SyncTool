@@ -107,13 +107,13 @@
   Neubauen fragt macOS erneut. Gelesen wird jetzt im Hintergrund, und wer das
   Passwort braucht, wartet darauf.
 - **Das Fenster bleibt unter seinem Symbol**, auch wenn Abschnitte auf- und
-  zugeklappt werden. Vorher wanderte die Oberkante mit jeder Höhenänderung.
-  Die Ansicht sagt dem Anker jetzt selbst, in welchem Fenster sie steckt,
-  statt dass er es an Breite, Stilmaske oder Klassennamen wiederzuerkennen
-  versucht; alle drei waren geraten und alle drei falsch. Er schaut außerdem
-  regelmäßig selbst nach, statt sich darauf zu verlassen, dass AppKit jede
-  Größenänderung meldet. Ist die Oberkante doch einmal verrutscht, zieht er sie
-  beim nächsten Blick zurück.
+  zugeklappt werden. Es hat jetzt eine feste Höhe, und der Mittelteil bekommt
+  einen Bildlauf. Was seine Höhe nie ändert, kann auch nicht verrutschen.
+  Fünf Anläufe haben vorher versucht, die Höhenänderung nachträglich
+  auszugleichen, und keiner kam an das Fenster heran: Unter macOS 26 gehört das
+  Popover einer `MenuBarExtra` nicht mehr zum eigenen Prozess. Es steht in
+  keiner Fensterliste, meldet keine Größenänderung, und auch die Ansicht darin
+  findet es nicht. Das Protokoll belegt es.
 - **Der Unterschied zwischen den beiden Bestandszahlen ist belegt statt
   behauptet.** Vorher verglich die App zwei Zahlen: Zieh die Repos ab, dann
   muss dieselbe Zahl übrigbleiben. Das ist keine Aussage, sondern eine Wette.

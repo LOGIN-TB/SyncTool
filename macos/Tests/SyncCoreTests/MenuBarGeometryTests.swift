@@ -103,6 +103,25 @@ struct MenuBarGeometryTests {
         #expect(!MenuBarGeometry.hangsAtMenuBar(top: sichtbar.maxY + 50, visibleFrame: sichtbar))
     }
 
+    /// Die Hoehe, mit der das Popover aufgeht.
+    ///
+    /// Sie ist fest, und das ist der Zweck: Ein Fenster, das seine Hoehe nie
+    /// aendert, kann auch nicht verrutschen. Auf einem kleinen Bildschirm faellt
+    /// sie kleiner aus, aber nie so klein, dass nur noch Kopf und Fuss passen.
+    @Test(
+        "Die Popoverhöhe passt auf den Bildschirm",
+        arguments: [
+            (1415.0, 620.0),  // grosser Bildschirm: die Wunschhöhe
+            (660.0, 620.0),  // gerade noch
+            (500.0, 460.0),  // kleiner Bildschirm: 40 Punkt Luft bleiben
+            (300.0, 360.0),  // sehr klein: die Untergrenze gewinnt
+        ] as [(CGFloat, CGFloat)]
+    )
+    func thePopoverHeightFitsTheScreen(hoehe: CGFloat, erwartet: CGFloat) {
+        let schirm = CGRect(x: 0, y: 0, width: 2560, height: hoehe)
+        #expect(MenuBarGeometry.popoverHeight(visibleFrame: schirm) == erwartet)
+    }
+
     /// Ohne Schwelle setzt jede Rundung einen neuen Frame, der wieder eine
     /// Benachrichtigung ausloest, die wieder einen Frame setzt.
     @Test("Bruchteile eines Punktes lösen keine Verschiebung aus")

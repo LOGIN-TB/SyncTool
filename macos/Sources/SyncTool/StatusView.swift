@@ -19,6 +19,14 @@ struct StatusView: View {
     /// Menueleiste setzt das; das eigene Statusfenster soll nirgends andocken.
     var windowKeeper: MenuBarWindowKeeper?
 
+    /// Feste Hoehe fuer das Popover der Menueleiste, `nil` fuer das eigene
+    /// Fenster.
+    ///
+    /// Das ist die Loesung fuer ein Fenster, das sich nicht nachfuehren laesst:
+    /// Was die Hoehe nie aendert, verrutscht auch nicht. Siehe
+    /// `MenuBarGeometry.popoverHeight`.
+    var fixedHeight: CGFloat?
+
     @State private var showLog = false
     @State private var deleteOnTransfer = false
     @State private var pendingDeletion: PendingDeletion?
@@ -33,15 +41,20 @@ struct StatusView: View {
     /// darunter durch: eine eingerueckte Trennlinie franst den rechten Rand aus.
     private let inset: CGFloat = 16
 
-    /// Bewusst ohne jeden Hoehenzwang.
+    /// Innen ohne jeden Hoehenzwang, aussen mit.
     ///
     /// `MenuBarExtra` im Fenster-Stil richtet die Fensterhoehe nach der
     /// Wunschgroesse dieser Ansicht. Jede feste oder auch nur mindestgesetzte
-    /// Hoehe im Inneren macht diese Wunschgroesse mehrdeutig; das Fenster
+    /// Hoehe *im Inneren* macht diese Wunschgroesse mehrdeutig; das Fenster
     /// bleibt dann zu klein, der Stapel staucht seine Kinder, und Kopfzeile,
-    /// Inhalt und Fusszeile zeichnen uebereinander. Gegen unbegrenztes Wachsen
-    /// hilft nicht eine Deckelung hier, sondern eine bei den langen Listen:
-    /// siehe `BoundedList`.
+    /// Inhalt und Fusszeile zeichnen uebereinander. Das gilt unveraendert.
+    ///
+    /// Die Hoehe ganz aussen ist etwas anderes, und sie ist der Grund, warum
+    /// das Popover nicht mehr wandert: Wenn diese Ansicht immer gleich hoch
+    /// ist, aendert das Fenster seine Groesse nie, und dann kann auch seine
+    /// Oberkante nicht verrutschen. Der Mittelteil bekommt dafuer einen
+    /// Bildlauf. `BoundedList` bleibt trotzdem, sonst fuellt eine einzige lange
+    /// Liste die ganze Flaeche.
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -53,10 +66,7 @@ struct StatusView: View {
 
             banners
 
-            content
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, inset)
-                .padding(.vertical, 12)
+            scrollingContent
 
             Divider()
 
@@ -65,6 +75,9 @@ struct StatusView: View {
                 .padding(.vertical, 10)
         }
         .frame(width: 460)
+        // `nil` laesst die Hoehe frei, und genau so soll das eigene
+        // Statusfenster sich verhalten.
+        .frame(height: fixedHeight)
         // Undurchsichtiger Grund, und zwar aus einem sachlichen Grund: Ueber
         // einer durchscheinenden Unterlage schaltet AppKit die Schriftglaettung
         // ab, Text wird duenn und ausgefranst. Das faellt bei einem Fenster
@@ -86,6 +99,32 @@ struct StatusView: View {
             // kein Loeschen.
             deleteOnTransfer = false
             pendingDeletion = nil
+        }
+    }
+
+    /// Der Mittelteil, bei fester Fensterhoehe mit Bildlauf.
+    ///
+    /// Ohne feste Hoehe bleibt alles wie vorher: Die Ansicht waechst mit ihrem
+    /// Inhalt, das eigene Statusfenster waechst mit, und die Bildschirmfotos
+    /// zeigen den ganzen Inhalt ohne Rollbalken.
+    @ViewBuilder
+    private var scrollingContent: some View {
+        let inner =
+            content
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, inset)
+            .padding(.vertical, 12)
+
+        if fixedHeight == nil {
+            inner
+        } else {
+            ScrollView {
+                inner
+            }
+            // Nimmt sich den Platz zwischen Kopf und Fuss, nicht mehr.
+            .frame(maxHeight: .infinity)
+            // Kurze Inhalte sollen nicht federn: Das sieht nach Fehler aus.
+            .scrollBounceBehavior(.basedOnSize)
         }
     }
 
