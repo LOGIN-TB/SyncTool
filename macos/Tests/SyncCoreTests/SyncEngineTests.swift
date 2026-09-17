@@ -491,7 +491,7 @@ final class SyncEngineTests {
     func aFailureKeepsTheSharedSyncTime() async throws {
         let frueher = Date(timeIntervalSince1970: 1_000_000)
         remote.files[SharedState.fileName] = try SharedState(
-            lastSync: frueher, commonPaths: [], lastMachine: "M1"
+            lastSync: frueher, lastMachine: "M1"
         ).encoded()
 
         runner.outcomes = [outcome([], status: 23)]
@@ -501,6 +501,26 @@ final class SyncEngineTests {
         )
         let stand = SharedState.decoded(remote.files[SharedState.fileName] ?? Data())
         #expect(stand?.lastSync == frueher)
+    }
+
+    /// Der gemeinsame Stand ist eine Auskunft und kein Datenbestand.
+    ///
+    /// Hier stand einmal die Liste aller gemeinsamen Pfade. Bei
+    /// dreissigtausend Dateien sind das dreieinhalb Megabyte, die nach jedem
+    /// Lauf durch eine Pipe an ein `cat` auf der Gegenseite gingen. Genau dort
+    /// stand die App still.
+    @Test("Der gemeinsame Stand bleibt klein")
+    func theSharedStateStaysSmall() async throws {
+        let viele = Set((0..<30_000).map { "ordner/datei-\($0).txt" })
+        inventoryStore.record(for: profile, commonPaths: viele)
+
+        _ = try await engine.transfer(
+            profile: profile, password: nil, direction: .push,
+            includeDeletes: false, expectedItems: 0, rsyncPath: "/usr/bin/rsync"
+        )
+        let daten = try #require(remote.files[SharedState.fileName])
+        // Ein paar Dutzend Bytes, keine Megabyte.
+        #expect(daten.count < 500, "\(daten.count) Bytes")
     }
 
     // MARK: - Die Übertragung folgt der Prüfung

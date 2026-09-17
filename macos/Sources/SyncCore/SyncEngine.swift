@@ -703,9 +703,6 @@ public final class SyncEngine {
             )
             let stand = SharedState(
                 lastSync: geglueckt ? (checkedAt ?? Date()) : vorher?.lastSync,
-                // Der lokal fortgeschriebene Bestand, und der ist nach einem
-                // Fehlschlag die Schnittmenge, also die vorsichtige Richtung.
-                commonPaths: inventoryStore.load(for: profile)?.paths ?? [],
                 lastMachine: SharedState.machineName
             )
             do {

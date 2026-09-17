@@ -66,6 +66,21 @@
 - `--timeout=900` für Läufe über ssh. Eine hängende Verbindung blockierte den
   Lauf bisher unbegrenzt.
 
+### Was die App zum Stillstand brachte
+
+- **Eine Verklemmung zwischen zwei Pipes.** `CommandRunner` schrieb die Eingabe
+  eines Prozesses, bevor die Leser für dessen Ausgabe liefen. Bei wenigen
+  Kilobyte fällt das nicht auf, alles passt in den Puffer. Bei mehr warten beide
+  Seiten aufeinander: Der Kindprozess kommt mit dem Schreiben nicht weiter und
+  liest deshalb auch nicht weiter, während wir noch schreiben wollen. Ausgelöst
+  hat es der gemeinsame Stand, siehe unten. Ein Test mit drei Megabyte über
+  `cat` hält den Fall fest; mit dem alten Code läuft er in den Zeitablauf.
+- **Der gemeinsame Stand trug den ganzen Dateibestand.** Bei dreißigtausend
+  Dateien sind das dreieinhalb Megabyte, die nach jedem Lauf über die Leitung
+  gingen. Entschieden hat die Liste dort ohnehin nichts, das steht seit ihrer
+  Einführung im Code. Geblieben ist die Auskunft, wer zuletzt gelaufen ist,
+  ein paar Dutzend Bytes.
+
 ### Statusfenster
 
 - **Nach einem erfolgreichen Abgleich stehen links und rechts dieselben

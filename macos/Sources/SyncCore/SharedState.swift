@@ -24,30 +24,42 @@ import Foundation
 /// Das ist ehrlicher als jede Automatik.
 public struct SharedState: Codable, Sendable {
     public static let fileName = ".synctool/stand.json"
-    public static let currentSchema = 1
+    public static let currentSchema = 2
 
     /// Wann zuletzt erfolgreich abgeglichen wurde, von welchem Rechner auch
     /// immer.
     public var lastSync: Date?
-    /// Was beim letzten Lauf auf beiden Seiten lag.
-    public var commonPaths: Set<String>
-    /// Wer zuletzt geschrieben hat. Steht nur im Protokoll und in der
-    /// Fehlersuche, entschieden wird daran nichts.
+    /// Wer zuletzt geschrieben hat.
     public var lastMachine: String
     public var writtenAt: Date
     public var schema: Int?
 
+    /// Kein gemeinsamer Bestand mehr.
+    ///
+    /// Hier stand die Liste aller Pfade, die beim letzten Lauf auf beiden
+    /// Seiten lagen. Zwei Gruende, beide ausreichend:
+    ///
+    /// Sie hat nie etwas entschieden. `knownPaths` beantwortet die Frage, ob
+    /// *dieser* Rechner den Pfad beim letzten Abgleich schon hatte, und dafuer
+    /// ist der Bestand eines anderen die falsche Quelle. Das stand schon in
+    /// `SyncEngine.check` und war der Grund, sie nur noch zu lesen.
+    ///
+    /// Und sie war teuer: Bei dreissigtausend Dateien sind das dreieinhalb
+    /// Megabyte, die nach jedem Lauf ueber die Leitung gingen, durch eine Pipe
+    /// an ein `cat` auf der Gegenseite. Genau daran stand die App still.
+    ///
+    /// Was bleibt, ist die Auskunft: wer zuletzt gelaufen ist und wann. Ein
+    /// paar Dutzend Bytes, und genau die Frage, die man sich bei mehreren
+    /// Rechnern stellt.
     public var isTrustworthy: Bool { schema == Self.currentSchema }
 
     public init(
         lastSync: Date?,
-        commonPaths: Set<String>,
         lastMachine: String,
         writtenAt: Date = Date(),
         schema: Int? = currentSchema
     ) {
         self.lastSync = lastSync
-        self.commonPaths = commonPaths
         self.lastMachine = lastMachine
         self.writtenAt = writtenAt
         self.schema = schema

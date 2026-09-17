@@ -81,11 +81,6 @@ public enum CommandRunner {
             throw CommandError.launchFailed(executable, error.localizedDescription)
         }
 
-        if let standardInput, let data = standardInput.data(using: .utf8) {
-            try? inPipe.fileHandleForWriting.write(contentsOf: data)
-        }
-        try? inPipe.fileHandleForWriting.close()
-
         // Beide Pipes parallel leeren, sonst blockiert der Kindprozess,
         // sobald ein Puffer vollläuft.
         var outData = Data()
@@ -104,6 +99,32 @@ public enum CommandRunner {
                 lock.unlock()
                 group.leave()
             }
+        }
+
+        // Die Eingabe erst jetzt, und in einem eigenen Faden.
+        //
+        // Vorher stand sie oben, direkt nach dem Start und vor den Lesern. Bei
+        // wenigen Kilobyte faellt das nicht auf, weil alles in den Puffer der
+        // Pipe passt. Bei mehr wird daraus eine Verklemmung: Der Kindprozess
+        // schreibt nach stdout, niemand liest, sein Puffer laeuft voll, er
+        // blockiert und liest deshalb auch nicht weiter aus stdin, waehrend wir
+        // dort noch schreiben wollen. Beide warten aufeinander, bis der
+        // Zeitablauf den Prozess abschiesst.
+        //
+        // Gefunden an einem Lauf, der drei Megabyte ueber ssh schicken wollte:
+        // Die App stand still und war danach weg, ohne Absturzbericht und ohne
+        // eine Zeile im Protokoll.
+        if let standardInput, let data = standardInput.data(using: .utf8) {
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                try? inPipe.fileHandleForWriting.write(contentsOf: data)
+                try? inPipe.fileHandleForWriting.close()
+                group.leave()
+            }
+        } else {
+            // Ohne Eingabe sofort schliessen, sonst wartet der Kindprozess auf
+            // ein Ende, das nie kommt.
+            try? inPipe.fileHandleForWriting.close()
         }
 
         let deadline = DispatchTime.now() + timeout

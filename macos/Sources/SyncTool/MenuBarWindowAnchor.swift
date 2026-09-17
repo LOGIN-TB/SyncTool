@@ -1,89 +1,74 @@
 import AppKit
 import SwiftUI
+import SyncCore
 
 /// Haelt das Menueleisten-Fenster unter seinem Symbol, wenn der Inhalt waechst.
 ///
 /// `MenuBarExtra` im Fenster-Stil richtet sein Fenster nur beim Oeffnen am
 /// Statusitem aus. Jede spaetere Hoehenaenderung kommt als `setFrame` mit
-/// stehender Unterkante an, und weil ein `NSWindow` seinen Ursprung unten links
-/// hat, wandert dabei die Oberkante nach oben. Ein Aufklappen der Repo-Liste
+/// stehendem Ursprung an, und weil ein `NSWindow` seinen Ursprung unten links
+/// hat, wandert dabei die Oberkante nach oben. Aufklappen der Repo-Liste
 /// verschiebt das Fenster so um mehrere hundert Punkt.
 ///
-/// Der Anker ist die Oberkante, die SwiftUI beim Oeffnen selbst gewaehlt hat.
-/// Die ist richtig, sie stammt vom Statusitem; sie geht nur bei der naechsten
-/// Groessenaenderung verloren. Gemerkt wird sie deshalb bei jeder Bewegung, die
-/// nicht von uns kommt, und bei jeder Groessenaenderung wieder hergestellt.
+/// Zwei Anlaeufe sind hier gescheitert, und beide am selben Punkt: Sie hingen
+/// davon ab, dass eine bestimmte Benachrichtigung kommt.
 ///
-/// Der erste Anlauf rechnete stattdessen mit dem Abstand zur Menueleiste, und
-/// zwar gemessen in `viewDidMoveToWindow`. Zu dem Zeitpunkt hat SwiftUI das
-/// Fenster noch nicht gesetzt: Der Abstand war Unsinn, die erste Korrektur
-/// schob das Fenster an die falsche Stelle, und die naechste Messung nahm diese
-/// Stelle fuer bare Muenze. Deshalb hier kein Messen mehr vor der ersten echten
-/// Bewegung und kein Bezug auf den Bildschirm, wo einer auf das Fenster genuegt.
+/// Der erste hat den Abstand zur Menueleiste in `viewDidMoveToWindow` gemessen.
+/// Da hat SwiftUI noch nicht positioniert, der Wert war Unsinn, und die erste
+/// Korrektur machte ihn zur Wahrheit.
 ///
-/// Die Breite bleibt unberuehrt. Sie aendert sich nie (`StatusView` steht auf
-/// 460), also ist die waagerechte Lage nie in Gefahr.
+/// Der zweite hat auf `didMove` und `didBecomeKey` gewartet. `didMove` kommt
+/// nicht, wenn das wiederverwendete Fenster schon an der richtigen Stelle
+/// steht, und `didBecomeKey` kommt bei einem nicht aktivierenden Panel gar
+/// nicht. Ohne Oberkante wurde nie korrigiert, und genau das war die Meldung:
+/// beim Oeffnen richtig, beim Aufklappen verrutscht.
+///
+/// Deshalb jetzt ohne Bedingung: Die gemessene Kante ist die bessere Quelle,
+/// aber wenn keine vorliegt, rechnet `MenuBarGeometry` mit der Menueleiste.
+/// Ein Menueleisten-Fenster haengt immer unmittelbar darunter. Damit wird in
+/// jedem Fall korrigiert, schlimmstenfalls um ein paar Punkte ungenau.
 private final class AnchorView: NSView {
-    /// Die Oberkante, an der das Fenster haengen soll. `nil` heisst: SwiftUI
-    /// hat noch nicht positioniert, also gibt es nichts zu halten.
-    private var anchorTop: CGFloat?
+    /// Die vom System gesetzte Oberkante, sofern wir eine gesehen haben.
+    private var measuredTop: CGFloat?
     /// Zaehlt die Korrekturen, die noch unterwegs sind.
     ///
-    /// Bewusst ein Zaehler und kein Schalter: Die Korrektur laeuft asynchron,
-    /// und die Benachrichtigung ueber unsere eigene Bewegung trifft erst
-    /// danach ein. Ein Schalter, der synchron wieder zurueckfaellt, waere zu
-    /// dem Zeitpunkt schon offen, und wir haetten unsere eigene Bewegung fuer
-    /// die von SwiftUI gehalten.
+    /// Ein Zaehler und kein Schalter: Die Korrektur laeuft asynchron, und die
+    /// Benachrichtigung ueber unsere eigene Bewegung trifft erst danach ein.
     private var pending = 0
     private var observers: [any NSObjectProtocol] = []
+    private let log = RunLog()
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         unsubscribe()
-        anchorTop = nil
+        measuredTop = nil
         guard let window = self.window else { return }
         // Nur das rahmenlose Popover. Das Einstellungsfenster und das
-        // Statusfenster der Bildschirmfoto-Werkstatt sind gewoehnliche Fenster
-        // und werden nicht nachgefuehrt, auch wenn der Schalter je an der
-        // falschen Stelle gesetzt wird.
+        // Statusfenster der Bildschirmfoto-Werkstatt sind gewoehnliche Fenster.
         guard !window.styleMask.contains(.titled) else { return }
 
         let center = NotificationCenter.default
-        observers = [
-            center.addObserver(
-                forName: NSWindow.didMoveNotification, object: window, queue: .main
-            ) { [weak self] _ in
-                guard let self, self.pending == 0 else { return }
-                // SwiftUI hat das Fenster gesetzt. Das ist die Wahrheit ueber
-                // die Oberkante.
-                self.anchorTop = window.frame.maxY
-            },
-            // Das Entscheidende, und der Grund, warum der erste Anlauf nie
-            // gegriffen hat: `MenuBarExtra` legt sein Fenster nicht jedes Mal
-            // neu an, es blendet dasselbe wieder ein. Steht es dabei schon an
-            // der richtigen Stelle, kommt gar keine Bewegung, und ohne
-            // Bewegung hatten wir nie eine Oberkante zu halten. Beim
-            // Sichtbarwerden steht sie dagegen immer fest.
-            center.addObserver(
-                forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
-            ) { [weak self] _ in
-                self?.anchorTop = window.frame.maxY
-            },
+        // Jede Gelegenheit, an der das System die Lage selbst bestimmt hat.
+        // Keine davon ist zugesichert, deshalb hoeren wir auf alle drei und
+        // kommen zugleich ohne jede davon aus.
+        let quellen: [Notification.Name] = [
+            NSWindow.didMoveNotification,
+            NSWindow.didBecomeKeyNotification,
+            NSWindow.didChangeOcclusionStateNotification,
+        ]
+        observers = quellen.map { name in
+            center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                guard let self, self.pending == 0, window.isVisible else { return }
+                self.measuredTop = window.frame.maxY
+            }
+        }
+        observers.append(
             center.addObserver(
                 forName: NSWindow.didResizeNotification, object: window, queue: .main
             ) { [weak self] _ in
                 self?.realign(window)
-            },
-        ]
-
-        // Und fuer den Fall, dass das Fenster schon steht, wenn diese Ansicht
-        // eingehaengt wird. Eine Runde spaeter, weil SwiftUI zu diesem
-        // Zeitpunkt noch nicht positioniert hat: Genau daran ist der erste
-        // Anlauf gescheitert, der hier sofort gemessen hat.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.anchorTop == nil, window.isVisible else { return }
-            self.anchorTop = window.frame.maxY
-        }
+            }
+        )
     }
 
     deinit { unsubscribe() }
@@ -94,33 +79,33 @@ private final class AnchorView: NSView {
     }
 
     private func realign(_ window: NSWindow) {
-        // Ohne Oberkante gibt es nichts zu halten. Sie hier zu nehmen waere
-        // falsch: Die Groesse hat sich gerade geaendert, die Oberkante ist
-        // also schon verschoben, und wir wuerden die Verschiebung festhalten,
-        // die wir gerade rueckgaengig machen sollen.
-        guard let anchorTop else { return }
-        var origin = window.frame.origin
-        origin.y = anchorTop - window.frame.height
-        // Nach unten klemmen: `BoundedList` deckelt jede Liste einzeln, mehrere
-        // aufgeklappte Abschnitte zusammen reichen aber unter den Bildschirm.
-        // Lieber ein Fenster, das unten anstoesst, als eines, dessen Fussleiste
-        // nicht mehr erreichbar ist.
-        if let screen = window.screen ?? NSScreen.main {
-            origin.y = max(origin.y, screen.visibleFrame.minY)
-        }
-        guard abs(origin.y - window.frame.origin.y) > 0.5 else { return }
+        guard let screen = window.screen ?? NSScreen.main else { return }
+        let anchorTop = MenuBarGeometry.anchorTop(
+            measured: measuredTop, visibleFrame: screen.visibleFrame
+        )
+        let ziel = MenuBarGeometry.origin(
+            currentOrigin: window.frame.origin,
+            height: window.frame.height,
+            anchorTop: anchorTop,
+            visibleFrame: screen.visibleFrame
+        )
+        guard MenuBarGeometry.worthMoving(from: window.frame.origin, to: ziel) else { return }
 
-        // Nicht synchron aus dem Benachrichtigungs-Handler heraus: Der laeuft
-        // mitten in AppKits Groessenaenderung, waehrend SwiftUI sein Layout
-        // rechnet. Ein `setFrameOrigin` an dieser Stelle greift in einen Lauf
-        // ein, der noch nicht fertig ist. Eine Runde spaeter ist alles
-        // abgeschlossen, und die Verschiebung faellt niemandem auf.
+        // Die Oberkante gilt weiter, auch wenn wir sie gerade selbst herstellen.
+        // Sonst waere sie nach dem ersten Ersatzwert dauerhaft der Ersatzwert.
+        measuredTop = anchorTop
+        log.write(
+            "Fenster nachgeführt: Höhe \(Int(window.frame.height)), "
+                + "Oberkante \(Int(anchorTop)), y \(Int(window.frame.origin.y)) → \(Int(ziel.y))"
+        )
+
+        // Nicht synchron aus dem Benachrichtigungs-Handler: Der laeuft mitten
+        // in AppKits Groessenaenderung, waehrend SwiftUI sein Layout rechnet.
         pending += 1
         DispatchQueue.main.async { [weak self] in
-            window.setFrameOrigin(origin)
-            // Erst danach freigeben, sonst haelt der `didMove`-Beobachter
-            // unsere eigene Bewegung fuer die von SwiftUI und merkt sich eine
-            // Oberkante, die wir gerade selbst gesetzt haben.
+            window.setFrameOrigin(ziel)
+            // Erst danach freigeben, sonst haelt der Beobachter unsere eigene
+            // Bewegung fuer die des Systems.
             DispatchQueue.main.async { self?.pending -= 1 }
         }
     }

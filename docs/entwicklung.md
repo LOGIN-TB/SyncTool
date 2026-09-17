@@ -22,7 +22,24 @@ eine Windows-Fassung überhaupt denkbar ist.
 
 ## Bauen
 
-Xcode wird nicht gebraucht, die Command Line Tools reichen.
+Xcode wird nicht gebraucht, die Command Line Tools reichen. Mit vollem Xcode
+geht allerdings mehr, und der Unterschied ist erheblich: **Ohne Xcode laesst
+sich das Ziel `SyncTool` nicht uebersetzen.** Den Command Line Tools fehlt
+`libSwiftUIMacros.dylib`, und jedes `@State` scheitert daran. `make test` baut
+alle Ziele mit und faellt aus demselben Grund um.
+
+Wer ohne Xcode arbeitet, kann SyncCore pruefen, aber keine einzige Zeile der
+Oberflaeche. Zwei Fehler in Folge sind so bis in die CI durchgerutscht: ein
+`@ViewBuilder`, das beim Einfuegen einer Eigenschaft an die falsche gewandert
+war, und ein Aufruf, der `async` brauchte. Beides faellt beim Uebersetzen
+sofort auf.
+
+Ist Xcode installiert, aber `xcode-select` zeigt noch auf die Command Line
+Tools, genuegt eine Variable, und zwar ohne Administratorrechte:
+
+```bash
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+```
 
 ```bash
 make app
